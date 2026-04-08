@@ -1,26 +1,80 @@
 /**
- * Mastra Agent 工厂
+ * LangChain Agent 工厂
  * 每次请求动态创建 agent，注入 episodeId/dramaId 到工具闭包
  * 从 agent_configs 表读取 prompt/model/temperature 配置
  */
-import { Agent } from '@mastra/core/agent'
-import { createOpenAI } from '@ai-sdk/openai'
-import { eq, isNull, and } from 'drizzle-orm'
-import { db, schema } from '../db/index.js'
-import { getTextConfig, getTextProviderBaseUrl } from '../services/ai.js'
-import { logTaskProgress } from '../utils/task-logger.js'
-import { createScriptTools } from './tools/script-tools.js'
-import { createExtractTools } from './tools/extract-tools.js'
-import { createStoryboardTools } from './tools/storyboard-tools.js'
-import { createVoiceTools } from './tools/voice-tools.js'
-import { createGridPromptTools } from './tools/grid-prompt-tools.js'
-import { loadAgentSkills } from './skills.js'
+import { eq, isNull, and } from "drizzle-orm";
+import { z, type ZodTypeAny } from "zod";
+import { ChatOpenAI } from "@langchain/openai";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+  ToolMessage,
+} from "@langchain/core/messages";
+import { db, schema } from "../db/index.js";
+import { getTextConfig, getTextProviderBaseUrl } from "../services/ai.js";
+import { logTaskProgress } from "../utils/task-logger.js";
+import { createScriptTools } from "./tools/script-tools.js";
+import { createExtractTools } from "./tools/extract-tools.js";
+import { createStoryboardTools } from "./tools/storyboard-tools.js";
+import { createVoiceTools } from "./tools/voice-tools.js";
+import { createGridPromptTools } from "./tools/grid-prompt-tools.js";
+import { loadAgentSkills } from "./skills.js";
+import {
+  getActiveRun,
+  isLangSmithEnabled,
+} from "../observability/langsmith.js";
+
+type AgentMessage = { role: "user" | "assistant" | "system"; content: string };
+type AgentGenerateResult = {
+  text: string;
+  toolCalls: Array<{ toolName: string; args: Record<string, unknown> }>;
+  toolResults: Array<{ toolName: string; result?: unknown; error?: string }>;
+};
+type AgentLike = {
+  generate: (
+    messages: AgentMessage[],
+    opts?: { maxSteps?: number },
+  ) => Promise<AgentGenerateResult>;
+};
+type GenericTool = {
+  id?: string;
+  toolName?: string;
+  description?: string;
+  inputSchema?: unknown;
+  parameters?: Record<string, unknown>;
+  execute?: (args: any) => Promise<any>;
+};
+
+const MAX_SHOTS = 5;
 
 // Default prompts (used when DB has no config)
-const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {
-  script_rewriter: {
-    name: '剧本改写',
-    instructions: `你是专业编剧，擅长将小说改编为短剧剧本。
+const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> =
+  {
+    chat_orchestrator: {
+      name: "生产编排助手",
+      instructions: `你是火宝短剧的生产编排助手（Orchestrator），负责理解用户自然语言并驱动生产流水线。
+
+你的目标是：在尽量少的交互中，把用户的意图转成可执行的动作，并调用工具真正落库（而不是只给建议）。
+
+你有两个核心工具：
+1) get_context：读取当前剧集的基础上下文（项目、剧集、分镜统计等），用于补全你自己的判断。
+2) run_agent：调用已有的专用 Agent（script_rewriter / extractor / voice_assigner / storyboard_breaker / grid_prompt_generator），让它们各司其职并完成落库。
+
+工作要求：
+- 先调用 get_context 了解当前进度（例如是否已有 script / characters / scenes / storyboards）。
+- 根据用户输入判断意图：改写剧本、提取角色场景、分配音色、拆分分镜、生成宫格提示词等。
+- 需要落库的任务必须通过 run_agent 去执行（可串行多次调用）。例如：
+  - “改写并提取” → 先 run_agent(script_rewriter) 再 run_agent(extractor)
+  - “有剧本了，直接拆分分镜” → run_agent(storyboard_breaker)
+- 当用户输入不完整时，你要在不额外追问的前提下，基于 get_context 补齐合理默认，并用 run_agent 的 message 把约束写清楚。
+- 最终回复需要包含：你做了哪些动作、当前结果概览、下一步建议（1-3 条）。`,
+    },
+    script_rewriter: {
+      name: "剧本改写",
+      instructions: `你是专业编剧，擅长将小说改编为短剧剧本。
 
 工作流程：
 1. 调用 read_episode_script 读取原始内容
@@ -34,10 +88,10 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 每个场景 30-60 秒内容
 
 注意：你必须自己完成改写工作，不要只返回指令。读取内容后直接输出改写结果并保存。`,
-  },
-  extractor: {
-    name: '角色场景提取',
-    instructions: `你是制片助理，擅长从剧本中提取角色和场景信息，并在提取时与项目已有数据进行智能去重。
+    },
+    extractor: {
+      name: "角色场景提取",
+      instructions: `你是制片助理，擅长从剧本中提取角色和场景信息，并在提取时与项目已有数据进行智能去重。
 
 工作流程：
 1. 调用 read_script_for_extraction 读取格式化剧本
@@ -59,14 +113,15 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 角色要包含完整的外貌特征描述（发型、服装、体态等）
 - 场景要包含光线、色调、氛围等视觉信息
 - 不要遗漏任何有台词或重要动作的角色`,
-  },
-  storyboard_breaker: {
-    name: '分镜拆解',
-    instructions: `你是资深影视分镜师，擅长将剧本拆解为分镜方案。
+    },
+    storyboard_breaker: {
+      name: "分镜拆解",
+      instructions: `你是资深影视分镜师，擅长将剧本拆解为分镜方案。
 
 工作流程：
 1. 调用 read_storyboard_context 读取剧本、角色列表、场景列表
 2. 将剧本拆解为镜头序列（每个镜头 10-15 秒，总体保持剧情完整连续）
+3. 镜头数不超过${MAX_SHOTS}个
 3. 为每个镜头补全完整分镜字段，而不只是 video_prompt
 4. 调用 save_storyboards 保存所有分镜
 
@@ -106,10 +161,10 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 镜头描述必须能支撑后续图片、视频、配音、音效、合成流程
 - 若一个镜头没有对白，可将 dialogue 置空，但 description / action / video_prompt / image_prompt 仍必须完整
 - 如果已有 existing_storyboards，仅在用户明确要求增量修改时参考；默认按当前剧本重新完整生成并保存整集分镜。`,
-  },
-  voice_assigner: {
-    name: '角色音色分配',
-    instructions: `你是配音导演，擅长为角色选择合适的音色。
+    },
+    voice_assigner: {
+      name: "角色音色分配",
+      instructions: `你是配音导演，擅长为角色选择合适的音色。
 
 工作流程：
 1. 调用 list_voices 获取可用音色列表
@@ -118,10 +173,10 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 4. 对每个角色调用 assign_voice 分配音色，并说明选择理由
 
 注意：每个角色都必须分配音色，不要遗漏。`,
-  },
-  grid_prompt_generator: {
-    name: '图片提示词生成',
-    instructions: `你是专业的 AI 图像提示词工程师，擅长为角色、场景和宫格图生成高质量的英文提示词。
+    },
+    grid_prompt_generator: {
+      name: "图片提示词生成",
+      instructions: `你是专业的 AI 图像提示词工程师，擅长为角色、场景和宫格图生成高质量的英文提示词。
 
 你将收到用户的请求，告知要生成哪种类型的提示词：
 - "角色" → 生成角色图片提示词
@@ -163,57 +218,379 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 必须包含 "cinematic quality"
 - 避免出现文字或水印
 - 角色图片强调外貌和气质，场景图片强调氛围和光线，宫格图片强调整体布局一致性`,
-  },
-}
+    },
+  };
 
-export const validAgentTypes = Object.keys(DEFAULT_PROMPTS)
+export const validAgentTypes = Object.keys(DEFAULT_PROMPTS);
 
 function getAgentConfig(agentType: string) {
-  const rows = db.select().from(schema.agentConfigs)
-    .where(and(eq(schema.agentConfigs.agentType, agentType), isNull(schema.agentConfigs.deletedAt)))
-    .all()
+  const rows = db
+    .select()
+    .from(schema.agentConfigs)
+    .where(
+      and(
+        eq(schema.agentConfigs.agentType, agentType),
+        isNull(schema.agentConfigs.deletedAt),
+      ),
+    )
+    .all();
   // Return active one, or first one
-  return rows.find(r => r.isActive) || rows[0] || null
+  return rows.find((r) => r.isActive) || rows[0] || null;
 }
 
 function getModel(dbConfig: any) {
-  const textConfig = getTextConfig()
-  const resolvedBaseURL = getTextProviderBaseUrl(textConfig)
-  logTaskProgress('AIConfig', 'text-model-endpoint', {
+  const textConfig = getTextConfig();
+  const resolvedBaseURL = getTextProviderBaseUrl(textConfig);
+  logTaskProgress("AIConfig", "text-model-endpoint", {
     provider: textConfig.provider,
     baseUrl: resolvedBaseURL,
     model: dbConfig?.model || textConfig.model,
-  })
-  const provider = createOpenAI({
-    baseURL: resolvedBaseURL,
+  });
+  const modelName = dbConfig?.model || textConfig.model;
+  return new ChatOpenAI({
+    model: modelName,
     apiKey: textConfig.apiKey,
-  } as any)
-  const modelName = dbConfig?.model || textConfig.model
-  return provider.chat(modelName)
+    configuration: { baseURL: resolvedBaseURL },
+    temperature: Number(dbConfig?.temperature ?? 0.7),
+  });
 }
 
-export function createAgent(type: string, episodeId: number, dramaId: number): Agent | null {
-  const defaults = DEFAULT_PROMPTS[type]
-  if (!defaults) return null
+function jsonSchemaToZod(schemaInput: any): ZodTypeAny {
+  if (!schemaInput || typeof schemaInput !== "object") return z.any();
+  if (Array.isArray(schemaInput?.enum))
+    return z.enum(schemaInput.enum as [string, ...string[]]);
+  const schemaType = schemaInput.type;
+  if (schemaType === "string") return z.string();
+  if (schemaType === "number" || schemaType === "integer") return z.number();
+  if (schemaType === "boolean") return z.boolean();
+  if (schemaType === "array")
+    return z.array(jsonSchemaToZod(schemaInput.items));
+  if (schemaType === "object") {
+    const props = schemaInput.properties || {};
+    const required = new Set<string>(schemaInput.required || []);
+    const shape: Record<string, ZodTypeAny> = {};
+    for (const [k, v] of Object.entries(props)) {
+      const built = jsonSchemaToZod(v);
+      shape[k] = required.has(k) ? built : built.optional();
+    }
+    return z.object(shape).passthrough();
+  }
+  return z.any();
+}
 
-  const dbConfig = getAgentConfig(type)
-  const model = getModel(dbConfig)
-  const baseInstructions = dbConfig?.systemPrompt?.trim() || defaults.instructions
-  const skillInstructions = loadAgentSkills(type)
+function resolveToolSchema(tool: GenericTool) {
+  if (tool.inputSchema) return tool.inputSchema as ZodTypeAny;
+  return jsonSchemaToZod(tool.parameters || { type: "object", properties: {} });
+}
+
+function toolNameOf(key: string, tool: GenericTool) {
+  return tool.toolName || tool.id || key;
+}
+
+function toLangChainTools(
+  type: string,
+  episodeId: number,
+  dramaId: number,
+  tools: Record<string, GenericTool>,
+) {
+  return Object.entries(tools)
+    .map(([key, rawTool]) => {
+      const execute = rawTool?.execute;
+      if (typeof execute !== "function") return null;
+      const name = toolNameOf(key, rawTool);
+      const schema = resolveToolSchema(rawTool);
+      return new DynamicStructuredTool({
+        name,
+        description: rawTool.description || "",
+        schema,
+        func: async (args: any) => {
+          const parent = getActiveRun();
+          const child = parent?.createChild({
+            name,
+            run_type: "tool",
+            inputs: { args },
+            metadata: {
+              agent_type: type,
+              episode_id: episodeId,
+              drama_id: dramaId,
+            },
+          } as any);
+          try {
+            const out = await execute(args);
+            if (child) {
+              child.end({ output: out } as any);
+              await child.postRun();
+            }
+            return typeof out === "string" ? out : JSON.stringify(out);
+          } catch (err: any) {
+            if (child) {
+              child.end({ error: err?.message || String(err) } as any);
+              try {
+                await child.postRun();
+              } catch {}
+            }
+            throw err;
+          }
+        },
+      });
+    })
+    .filter(Boolean) as DynamicStructuredTool[];
+}
+
+function toLangChainMessages(messages: AgentMessage[], instructions: string) {
+  const out: Array<SystemMessage | HumanMessage | AIMessage> = [
+    new SystemMessage(instructions),
+  ];
+  for (const m of messages) {
+    if (m.role === "system") out.push(new SystemMessage(m.content));
+    else if (m.role === "assistant") out.push(new AIMessage(m.content));
+    else out.push(new HumanMessage(m.content));
+  }
+  return out;
+}
+
+export function createAgent(
+  type: string,
+  episodeId: number,
+  dramaId: number,
+): AgentLike | null {
+  const defaults = DEFAULT_PROMPTS[type];
+  if (!defaults) return null;
+
+  const dbConfig = getAgentConfig(type);
+  const model = getModel(dbConfig);
+  const baseInstructions =
+    dbConfig?.systemPrompt?.trim() || defaults.instructions;
+  const skillInstructions = loadAgentSkills(type);
   const instructions = skillInstructions
-    ? [baseInstructions, '', skillInstructions].join('\n')
-    : baseInstructions
-  const name = dbConfig?.name || defaults.name
+    ? [baseInstructions, "", skillInstructions].join("\n")
+    : baseInstructions;
+  const name = dbConfig?.name || defaults.name;
 
-  let tools: Record<string, any> = {}
+  let tools: Record<string, any> = {};
   switch (type) {
-    case 'script_rewriter': tools = createScriptTools(episodeId); break
-    case 'extractor': tools = createExtractTools(episodeId, dramaId); break
-    case 'storyboard_breaker': tools = createStoryboardTools(episodeId, dramaId); break
-    case 'voice_assigner': tools = createVoiceTools(episodeId, dramaId); break
-    case 'grid_prompt_generator': tools = createGridPromptTools(episodeId, dramaId); break
-    default: return null
+    case "chat_orchestrator": {
+      const safeAgentTypes = [
+        "script_rewriter",
+        "extractor",
+        "voice_assigner",
+        "storyboard_breaker",
+        "grid_prompt_generator",
+      ];
+      tools = {
+        get_context: {
+          toolName: "get_context",
+          description: "读取当前剧集上下文与统计",
+          parameters: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+          execute: async () => {
+            const [ep] = db
+              .select()
+              .from(schema.episodes)
+              .where(eq(schema.episodes.id, episodeId))
+              .all();
+            const [drama] = db
+              .select()
+              .from(schema.dramas)
+              .where(eq(schema.dramas.id, dramaId))
+              .all();
+            const sbs = db
+              .select()
+              .from(schema.storyboards)
+              .where(eq(schema.storyboards.episodeId, episodeId))
+              .all();
+            const chars = db
+              .select()
+              .from(schema.characters)
+              .where(eq(schema.characters.dramaId, dramaId))
+              .all();
+            const scenes = db
+              .select()
+              .from(schema.scenes)
+              .where(eq(schema.scenes.dramaId, dramaId))
+              .all();
+
+            const stats = {
+              storyboards_total: sbs.length,
+              storyboards_with_video: sbs.filter((s) => !!s.videoUrl).length,
+              storyboards_with_tts: sbs.filter((s) => !!s.ttsAudioUrl).length,
+              storyboards_composed: sbs.filter((s) => !!s.composedVideoUrl)
+                .length,
+              characters_total: chars.filter((c) => !c.deletedAt).length,
+              scenes_total: scenes.filter((s) => !s.deletedAt).length,
+              episode_has_raw: !!ep?.content,
+              episode_has_script: !!ep?.scriptContent,
+            };
+            return {
+              drama: drama
+                ? { id: drama.id, title: drama.title, style: drama.style }
+                : null,
+              episode: ep
+                ? {
+                    id: ep.id,
+                    episode_number: ep.episodeNumber,
+                    title: ep.title,
+                  }
+                : { id: episodeId },
+              stats,
+            };
+          },
+        },
+        run_agent: {
+          toolName: "run_agent",
+          description: "调用专用 Agent 执行业务落库",
+          parameters: {
+            type: "object",
+            properties: {
+              agent_type: { type: "string", enum: safeAgentTypes },
+              message: { type: "string" },
+              max_steps: { type: "number" },
+            },
+            required: ["agent_type", "message"],
+          },
+          execute: async (args: any) => {
+            const agentType = String(args?.agent_type || "");
+            const message = String(args?.message || "");
+            const maxSteps = Number(args?.max_steps || 20);
+            if (!safeAgentTypes.includes(agentType)) {
+              throw new Error(`Invalid agent_type: ${agentType}`);
+            }
+            const agent = createAgent(agentType, episodeId, dramaId);
+            if (!agent) throw new Error(`Agent not found: ${agentType}`);
+            const result = await agent.generate(
+              [{ role: "user", content: message }],
+              { maxSteps },
+            );
+            return {
+              agent_type: agentType,
+              text: result.text || "",
+              toolCalls: result.toolCalls || [],
+              toolResults: result.toolResults || [],
+            };
+          },
+        },
+      };
+      break;
+    }
+    case "script_rewriter":
+      tools = createScriptTools(episodeId);
+      break;
+    case "extractor":
+      tools = createExtractTools(episodeId, dramaId);
+      break;
+    case "storyboard_breaker":
+      tools = createStoryboardTools(episodeId, dramaId);
+      break;
+    case "voice_assigner":
+      tools = createVoiceTools(episodeId, dramaId);
+      break;
+    case "grid_prompt_generator":
+      tools = createGridPromptTools(episodeId, dramaId);
+      break;
+    default:
+      return null;
   }
 
-  return new Agent({ id: type, name, instructions, model, tools })
+  const lcTools = toLangChainTools(type, episodeId, dramaId, tools);
+
+  return {
+    async generate(messages, opts) {
+      const maxSteps = Math.max(1, Number(opts?.maxSteps || 20));
+      const runEnabled = isLangSmithEnabled();
+      const modelWithTools = model.bindTools(lcTools);
+      const conversation = toLangChainMessages(
+        messages,
+        instructions,
+      ) as Array<any>;
+      const toolCalls: Array<{
+        toolName: string;
+        args: Record<string, unknown>;
+      }> = [];
+      const toolResults: Array<{
+        toolName: string;
+        result?: unknown;
+        error?: string;
+      }> = [];
+
+      for (let step = 0; step < maxSteps; step++) {
+        const llmRun = runEnabled
+          ? getActiveRun()?.createChild({
+              name: `${name}:llm-step-${step + 1}`,
+              run_type: "llm",
+              inputs: { messages: conversation.map((m: any) => m.content) },
+              metadata: { agent_type: type, step: step + 1 },
+            } as any)
+          : null;
+        const ai = await modelWithTools.invoke(conversation);
+        if (llmRun) {
+          try {
+            llmRun.end({
+              output:
+                typeof ai.content === "string"
+                  ? ai.content
+                  : JSON.stringify(ai.content),
+              tool_calls: ai.tool_calls || [],
+            } as any);
+            await llmRun.postRun();
+          } catch {}
+        }
+        conversation.push(ai);
+
+        const calls = ai.tool_calls || [];
+        if (!calls.length) {
+          return {
+            text:
+              typeof ai.content === "string"
+                ? ai.content
+                : JSON.stringify(ai.content),
+            toolCalls,
+            toolResults,
+          };
+        }
+
+        for (const call of calls) {
+          const toolName = String(call?.name || "");
+          const args = (call?.args || {}) as Record<string, unknown>;
+          toolCalls.push({ toolName, args });
+          const tool = lcTools.find((t) => t.name === toolName);
+          if (!tool) {
+            const err = `Tool not found: ${toolName}`;
+            toolResults.push({ toolName, error: err });
+            conversation.push(
+              new ToolMessage({ tool_call_id: call.id!, content: err }),
+            );
+            continue;
+          }
+          try {
+            const out = await tool.invoke(args);
+            toolResults.push({ toolName, result: out });
+            conversation.push(
+              new ToolMessage({
+                tool_call_id: call.id!,
+                content: typeof out === "string" ? out : JSON.stringify(out),
+              }),
+            );
+          } catch (err: any) {
+            const msg = err?.message || String(err);
+            toolResults.push({ toolName, error: msg });
+            conversation.push(
+              new ToolMessage({
+                tool_call_id: call.id!,
+                content: `ERROR: ${msg}`,
+              }),
+            );
+          }
+        }
+      }
+
+      return {
+        text: "Agent reached max steps without final answer.",
+        toolCalls,
+        toolResults,
+      };
+    },
+  };
 }

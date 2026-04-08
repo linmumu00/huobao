@@ -10,13 +10,20 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.12.21",
+    "dompurify": "^3.3.3",
+    "lucide-vue-next": "^0.511.0",
+    "markdown-it": "^14.1.1",
     "nuxt": "^3.17.5",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "vue": "^3.5.13",
     "vue-router": "^4.5.1",
-    "vue-sonner": "^1.2.4",
-    "lucide-vue-next": "^0.511.0"
+    "vue-sonner": "^1.2.4"
   },
   "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "typescript": "^5.8.3"
   }
 }

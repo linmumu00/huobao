@@ -281,6 +281,18 @@ export const videoMerges = sqliteTable('video_merges', {
   deletedAt: text('deleted_at'),
 })
 
+// 对话消息（按项目/剧集归档）
+export const chatMessages = sqliteTable('chat_messages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  dramaId: integer('drama_id').notNull(),
+  episodeId: integer('episode_id').notNull(),
+  role: text('role').notNull(), // user | assistant | system
+  content: text('content').notNull(),
+  toolCalls: text('tool_calls'), // JSON string
+  toolResults: text('tool_results'), // JSON string
+  createdAt: text('created_at').notNull(),
+})
+
 export const props = sqliteTable('props', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   dramaId: integer('drama_id').notNull(),

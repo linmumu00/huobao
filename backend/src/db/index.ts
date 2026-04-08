@@ -297,6 +297,21 @@ sqlite.exec(`
     deleted_at TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    drama_id INTEGER NOT NULL,
+    episode_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tool_calls TEXT,
+    tool_results TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_episode_id
+    ON chat_messages (episode_id);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_drama_id
+    ON chat_messages (drama_id);
+
   CREATE TABLE IF NOT EXISTS props (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     drama_id INTEGER NOT NULL,

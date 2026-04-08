@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
@@ -16,6 +17,7 @@ import upload from './routes/upload.js'
 import aiConfigs, { aiProviders } from './routes/aiConfigs.js'
 import agentConfigs from './routes/agentConfigs.js'
 import agent from './routes/agent.js'
+import chat from './routes/chat.js'
 import compose from './routes/compose.js'
 import merge from './routes/merge.js'
 import grid from './routes/grid.js'
@@ -54,6 +56,7 @@ api.route('/ai-configs', aiConfigs)
 api.route('/ai-providers', aiProviders)
 api.route('/agent-configs', agentConfigs)
 api.route('/agent', agent)
+api.route('/chat', chat)
 api.route('/compose', compose)
 api.route('/merge', merge)
 api.route('/grid', grid)

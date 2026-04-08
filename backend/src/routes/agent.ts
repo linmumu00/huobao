@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { createAgent, validAgentTypes } from '../agents/index.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { requestTraceMeta, withLangSmithRootRun } from '../observability/langsmith.js'
 
 const app = new Hono()
 
@@ -53,39 +54,64 @@ app.post('/:type/chat', async (c) => {
   const startTime = performance.now()
 
   try {
-    const result = await agent.generate(
-      [{ role: 'user', content: message }],
-      { maxSteps: 20 },
+    return await withLangSmithRootRun(
+      {
+        name: `agent:${agentType}`,
+        runType: 'chain',
+        inputs: { message, drama_id, episode_id },
+        tags: ['route:agent'],
+        metadata: requestTraceMeta(c),
+      },
+      async (run) => {
+        const result = await agent.generate(
+          [{ role: 'user', content: message }],
+          { maxSteps: 20 },
+        )
+
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
+        logTaskSuccess('Agent', agentType, { elapsedSeconds: elapsed })
+
+        // 收集所有 tool calls 和 results
+        const toolCalls = result.toolCalls || []
+        const toolResults = result.toolResults || []
+        const normalizedToolCalls = toolCalls.map((tc: any) => ({
+          toolName: normalizeToolName(tc),
+          args: tc?.args ?? tc?.input ?? null,
+        }))
+        const normalizedToolResults = toolResults.map((tr: any) => ({
+          toolName: normalizeToolName(tr),
+          result: normalizeToolResult(tr),
+        }))
+
+        logTaskProgress('Agent', 'tool-summary', {
+          agentType,
+          toolCalls: normalizedToolCalls.map((tc: any) => tc.toolName),
+          toolResults: normalizedToolResults.map((tr: any) => tr.toolName),
+        })
+        logTaskPayload('Agent', `${agentType} tool-results`, normalizedToolResults)
+
+        const payload = {
+          type: 'done',
+          text: result.text || '',
+          toolCalls: normalizedToolCalls,
+          toolResults: normalizedToolResults,
+        }
+
+        if (run) {
+          try {
+            await run.end({
+              text: payload.text,
+              toolCalls: payload.toolCalls?.map((x: any) => x.toolName).filter(Boolean),
+              toolResults: payload.toolResults?.map((x: any) => x.toolName).filter(Boolean),
+              elapsedSeconds: elapsed,
+            })
+            await run.patchRun()
+          } catch {}
+        }
+
+        return success(c, payload)
+      },
     )
-
-    const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
-    logTaskSuccess('Agent', agentType, { elapsedSeconds: elapsed })
-
-    // 收集所有 tool calls 和 results
-    const toolCalls = result.toolCalls || []
-    const toolResults = result.toolResults || []
-    const normalizedToolCalls = toolCalls.map((tc: any) => ({
-      toolName: normalizeToolName(tc),
-      args: tc?.args ?? tc?.input ?? null,
-    }))
-    const normalizedToolResults = toolResults.map((tr: any) => ({
-      toolName: normalizeToolName(tr),
-      result: normalizeToolResult(tr),
-    }))
-
-    logTaskProgress('Agent', 'tool-summary', {
-      agentType,
-      toolCalls: normalizedToolCalls.map((tc: any) => tc.toolName),
-      toolResults: normalizedToolResults.map((tr: any) => tr.toolName),
-    })
-    logTaskPayload('Agent', `${agentType} tool-results`, normalizedToolResults)
-
-    return success(c, {
-      type: 'done',
-      text: result.text || '',
-      toolCalls: normalizedToolCalls,
-      toolResults: normalizedToolResults,
-    })
   } catch (err: any) {
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
     logTaskError('Agent', agentType, { elapsedSeconds: elapsed, error: err.message })
