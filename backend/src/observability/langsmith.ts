@@ -8,6 +8,34 @@ type MaybeRunTree = RunTree | null
 const als = new AsyncLocalStorage<RunTree>()
 const posted = new WeakSet<RunTree>()
 
+function toTraceSafeValue(value: any): any {
+  if (value == null) return value
+  const t = typeof value
+  if (t === 'string' || t === 'number' || t === 'boolean') return value
+  if (Array.isArray(value)) return value.map((item) => toTraceSafeValue(item))
+  if (t === 'object') {
+    // 避免直接写入不可序列化对象（如 Response/Request/Error 等）
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+      }
+    }
+    if ('status' in value && 'ok' in value && 'headers' in value) {
+      return {
+        status: (value as any).status,
+        ok: (value as any).ok,
+      }
+    }
+    const out: Record<string, any> = {}
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = toTraceSafeValue(v)
+    }
+    return out
+  }
+  return String(value)
+}
+
 function envTrue(v?: string) {
   if (!v) return false
   return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase())
@@ -84,6 +112,45 @@ export function requestTraceMeta(c: Context) {
     }
   } catch {
     return { method: c.req.method }
+  }
+}
+
+export async function withLangSmithChildRun<T>(
+  opts: {
+    name: string
+    runType?: string
+    inputs?: any
+    tags?: string[]
+    metadata?: Record<string, any>
+    mapOutput?: (result: T) => any
+  },
+  fn: () => Promise<T>,
+) {
+  const parent = getActiveRun()
+  const child = parent?.createChild({
+    name: opts.name,
+    run_type: opts.runType ?? 'tool',
+    inputs: opts.inputs ?? {},
+    tags: opts.tags,
+    metadata: opts.metadata,
+  } as any)
+
+  try {
+    const result = await fn()
+    if (child) {
+      const output = opts.mapOutput ? opts.mapOutput(result) : result
+      child.end({ output: toTraceSafeValue(output) } as any)
+      await child.postRun()
+    }
+    return result
+  } catch (err) {
+    if (child) {
+      child.end(undefined, err instanceof Error ? err.message : String(err))
+      try {
+        await child.postRun()
+      } catch {}
+    }
+    throw err
   }
 }
 
