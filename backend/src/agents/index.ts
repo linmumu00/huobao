@@ -15,6 +15,11 @@ import {
 } from "@langchain/core/messages";
 import { db, schema } from "../db/index.js";
 import { getTextConfig, getTextProviderBaseUrl } from "../services/ai.js";
+import { generateImage } from "../services/image-generation.js";
+import { generateVideo } from "../services/video-generation.js";
+import { generateTTS, generateVoiceSample } from "../services/tts-generation.js";
+import { composeStoryboard } from "../services/ffmpeg-compose.js";
+import { mergeEpisodeVideos } from "../services/ffmpeg-merge.js";
 import { logTaskProgress } from "../utils/task-logger.js";
 import { createScriptTools } from "./tools/script-tools.js";
 import { createExtractTools } from "./tools/extract-tools.js";
@@ -33,10 +38,17 @@ type AgentGenerateResult = {
   toolCalls: Array<{ toolName: string; args: Record<string, unknown> }>;
   toolResults: Array<{ toolName: string; result?: unknown; error?: string }>;
 };
+type AgentRuntimeEvent =
+  | { type: "tool_call"; step: number; toolName: string; args: Record<string, unknown> }
+  | { type: "tool_result"; step: number; toolName: string; result?: unknown; error?: string }
+  | { type: "final_text"; text: string };
 type AgentLike = {
   generate: (
     messages: AgentMessage[],
-    opts?: { maxSteps?: number },
+    opts?: {
+      maxSteps?: number;
+      onEvent?: (event: AgentRuntimeEvent) => void | Promise<void>;
+    },
   ) => Promise<AgentGenerateResult>;
 };
 type GenericTool = {
@@ -472,6 +484,547 @@ export function createAgent(
             };
           },
         },
+        generate_character_image: {
+          toolName: "generate_character_image",
+          description: "生成人物图（单角色）并回写角色 image_url",
+          parameters: {
+            type: "object",
+            properties: {
+              character_id: { type: "number" },
+              prompt: { type: "string" },
+            },
+            required: ["character_id"],
+          },
+          execute: async (args: any) => {
+            const characterId = Number(args?.character_id || 0);
+            if (!characterId) throw new Error("character_id is required");
+            const [char] = db
+              .select()
+              .from(schema.characters)
+              .where(eq(schema.characters.id, characterId))
+              .all();
+            if (!char) throw new Error(`Character ${characterId} not found`);
+            const prompt = String(
+              args?.prompt ||
+                `${char.name}, ${char.appearance || char.description || "人物立绘"}, 高质量, 正面, 白色背景`,
+            ).trim();
+            const imageGenerationId = await generateImage({
+              dramaId: char.dramaId,
+              characterId,
+              prompt,
+            });
+            return { character_id: characterId, image_generation_id: imageGenerationId };
+          },
+        },
+        batch_generate_character_images: {
+          toolName: "batch_generate_character_images",
+          description: "批量生成人物图（默认仅生成未出图角色）",
+          parameters: {
+            type: "object",
+            properties: {
+              character_ids: { type: "array", items: { type: "number" } },
+            },
+          },
+          execute: async (args: any) => {
+            const inputIds = Array.isArray(args?.character_ids)
+              ? args.character_ids.map((id: any) => Number(id)).filter(Boolean)
+              : [];
+            const chars = db
+              .select()
+              .from(schema.characters)
+              .where(eq(schema.characters.dramaId, dramaId))
+              .all()
+              .filter((c) => !c.deletedAt);
+            const targets = chars.filter((c) => {
+              if (inputIds.length && !inputIds.includes(c.id)) return false;
+              return !c.imageUrl;
+            });
+            const started: Array<{ character_id: number; image_generation_id: number }> = [];
+            for (const c of targets) {
+              const prompt = `${c.name}, ${c.appearance || c.description || "人物立绘"}, 高质量, 正面, 白色背景`;
+              const imageGenerationId = await generateImage({
+                dramaId: c.dramaId,
+                characterId: c.id,
+                prompt,
+              });
+              started.push({ character_id: c.id, image_generation_id: imageGenerationId });
+            }
+            return { count: started.length, started };
+          },
+        },
+        generate_scene_image: {
+          toolName: "generate_scene_image",
+          description: "生成场景图（单场景）并回写场景 image_url",
+          parameters: {
+            type: "object",
+            properties: {
+              scene_id: { type: "number" },
+              prompt: { type: "string" },
+            },
+            required: ["scene_id"],
+          },
+          execute: async (args: any) => {
+            const sceneId = Number(args?.scene_id || 0);
+            if (!sceneId) throw new Error("scene_id is required");
+            const [scene] = db
+              .select()
+              .from(schema.scenes)
+              .where(eq(schema.scenes.id, sceneId))
+              .all();
+            if (!scene) throw new Error(`Scene ${sceneId} not found`);
+            const prompt = String(
+              args?.prompt ||
+                scene.prompt ||
+                `${scene.location}, ${scene.time || ""}, 高质量场景, 电影感`,
+            ).trim();
+            const imageGenerationId = await generateImage({
+              dramaId: scene.dramaId,
+              sceneId: scene.id,
+              prompt,
+            });
+            return { scene_id: sceneId, image_generation_id: imageGenerationId };
+          },
+        },
+        batch_generate_scene_images: {
+          toolName: "batch_generate_scene_images",
+          description: "批量生成场景图（默认仅生成未出图场景）",
+          parameters: {
+            type: "object",
+            properties: {
+              scene_ids: { type: "array", items: { type: "number" } },
+            },
+          },
+          execute: async (args: any) => {
+            const inputIds = Array.isArray(args?.scene_ids)
+              ? args.scene_ids.map((id: any) => Number(id)).filter(Boolean)
+              : [];
+            const scenes = db
+              .select()
+              .from(schema.scenes)
+              .where(eq(schema.scenes.dramaId, dramaId))
+              .all()
+              .filter((s) => !s.deletedAt);
+            const targets = scenes.filter((s) => {
+              if (inputIds.length && !inputIds.includes(s.id)) return false;
+              return !s.imageUrl;
+            });
+            const started: Array<{ scene_id: number; image_generation_id: number }> = [];
+            for (const s of targets) {
+              const prompt =
+                s.prompt || `${s.location}, ${s.time || ""}, 高质量场景, 电影感`;
+              const imageGenerationId = await generateImage({
+                dramaId: s.dramaId,
+                sceneId: s.id,
+                prompt,
+              });
+              started.push({ scene_id: s.id, image_generation_id: imageGenerationId });
+            }
+            return { count: started.length, started };
+          },
+        },
+        generate_storyboard_frame: {
+          toolName: "generate_storyboard_frame",
+          description: "生成镜头首帧/尾帧图片（first_frame 或 last_frame）",
+          parameters: {
+            type: "object",
+            properties: {
+              storyboard_id: { type: "number" },
+              frame_type: {
+                type: "string",
+                enum: ["first_frame", "last_frame"],
+              },
+              prompt: { type: "string" },
+              reference_images: { type: "array", items: { type: "string" } },
+            },
+            required: ["storyboard_id", "frame_type"],
+          },
+          execute: async (args: any) => {
+            const storyboardId = Number(args?.storyboard_id || 0);
+            if (!storyboardId) throw new Error("storyboard_id is required");
+            const frameType = String(args?.frame_type || "");
+            if (!["first_frame", "last_frame"].includes(frameType)) {
+              throw new Error("frame_type must be first_frame or last_frame");
+            }
+            const [sb] = db
+              .select()
+              .from(schema.storyboards)
+              .where(eq(schema.storyboards.id, storyboardId))
+              .all();
+            if (!sb) throw new Error(`Storyboard ${storyboardId} not found`);
+            const scene = sb.sceneId
+              ? db
+                  .select()
+                  .from(schema.scenes)
+                  .where(eq(schema.scenes.id, sb.sceneId))
+                  .all()[0]
+              : null;
+            const refs = new Set<string>();
+            const pushRef = (value?: string | null) => {
+              const text = String(value || "").trim();
+              if (!text) return;
+              refs.add(text);
+            };
+            pushRef(scene?.imageUrl);
+            const charLinks = db
+              .select()
+              .from(schema.storyboardCharacters)
+              .where(eq(schema.storyboardCharacters.storyboardId, storyboardId))
+              .all();
+            for (const link of charLinks) {
+              const [char] = db
+                .select()
+                .from(schema.characters)
+                .where(eq(schema.characters.id, link.characterId))
+                .all();
+              pushRef(char?.imageUrl);
+            }
+            if (sb.referenceImages) {
+              try {
+                const parsed = JSON.parse(sb.referenceImages);
+                if (Array.isArray(parsed)) {
+                  for (const item of parsed) pushRef(String(item || ""));
+                }
+              } catch {}
+            }
+            pushRef(sb.firstFrameImage);
+            pushRef(sb.lastFrameImage);
+            const defaultPrompt = [
+              sb.title ? `镜头标题：${sb.title}` : "",
+              sb.imagePrompt ? `画面描述：${sb.imagePrompt}` : "",
+              sb.shotType ? `景别：${sb.shotType}` : "",
+              sb.angle ? `机位：${sb.angle}` : "",
+              sb.movement ? `运镜：${sb.movement}` : "",
+              sb.location ? `地点：${sb.location}` : "",
+              sb.time ? `时间：${sb.time}` : "",
+              sb.action ? `动作：${sb.action}` : "",
+              sb.atmosphere ? `氛围：${sb.atmosphere}` : "",
+              frameType === "first_frame"
+                ? "生成这个镜头的起始关键帧，突出动作开始瞬间"
+                : "生成这个镜头的结束关键帧，突出动作收束和结果状态",
+            ]
+              .filter(Boolean)
+              .join("；");
+            const prompt = String(args?.prompt || defaultPrompt).trim();
+            if (!prompt) throw new Error("prompt is required");
+            const imageGenerationId = await generateImage({
+              storyboardId,
+              dramaId,
+              prompt,
+              frameType,
+              referenceImages: Array.isArray(args?.reference_images)
+                ? args.reference_images.map((x: any) => String(x))
+                : Array.from(refs).slice(0, 6),
+            });
+            return {
+              storyboard_id: storyboardId,
+              frame_type: frameType,
+              image_generation_id: imageGenerationId,
+            };
+          },
+        },
+        generate_storyboard_video: {
+          toolName: "generate_storyboard_video",
+          description: "生成镜头视频（自动按首尾帧/参考图推断 reference_mode）",
+          parameters: {
+            type: "object",
+            properties: {
+              storyboard_id: { type: "number" },
+              prompt: { type: "string" },
+              duration: { type: "number" },
+              reference_mode: { type: "string" },
+              image_url: { type: "string" },
+              first_frame_url: { type: "string" },
+              last_frame_url: { type: "string" },
+              reference_image_urls: { type: "array", items: { type: "string" } },
+              aspect_ratio: { type: "string" },
+            },
+            required: ["storyboard_id"],
+          },
+          execute: async (args: any) => {
+            const storyboardId = Number(args?.storyboard_id || 0);
+            if (!storyboardId) throw new Error("storyboard_id is required");
+            const [sb] = db
+              .select()
+              .from(schema.storyboards)
+              .where(eq(schema.storyboards.id, storyboardId))
+              .all();
+            if (!sb) throw new Error(`Storyboard ${storyboardId} not found`);
+            const prompt = String(args?.prompt || sb.videoPrompt || "").trim();
+            if (!prompt) throw new Error("video prompt is required");
+            const firstFrameUrl = String(
+              args?.first_frame_url || sb.firstFrameImage || "",
+            ).trim();
+            const lastFrameUrl = String(
+              args?.last_frame_url || sb.lastFrameImage || "",
+            ).trim();
+            let referenceImageUrls = Array.isArray(args?.reference_image_urls)
+              ? args.reference_image_urls.map((x: any) => String(x))
+              : [];
+            if (!referenceImageUrls.length && sb.referenceImages) {
+              try {
+                const parsed = JSON.parse(sb.referenceImages);
+                if (Array.isArray(parsed)) {
+                  referenceImageUrls = parsed.map((x) => String(x || ""));
+                }
+              } catch {}
+            }
+            let referenceMode = String(args?.reference_mode || "").trim();
+            if (!referenceMode) {
+              if (firstFrameUrl && lastFrameUrl) referenceMode = "first_last";
+              else if (firstFrameUrl) referenceMode = "single";
+              else if (referenceImageUrls.length) referenceMode = "multiple";
+              else referenceMode = "none";
+            }
+            const videoGenerationId = await generateVideo({
+              storyboardId,
+              dramaId,
+              prompt,
+              referenceMode,
+              imageUrl: args?.image_url ? String(args.image_url) : undefined,
+              firstFrameUrl: firstFrameUrl || undefined,
+              lastFrameUrl: lastFrameUrl || undefined,
+              referenceImageUrls: referenceImageUrls.length
+                ? referenceImageUrls
+                : undefined,
+              duration:
+                args?.duration != null
+                  ? Number(args.duration)
+                  : Number(sb.duration || 5),
+              aspectRatio: args?.aspect_ratio
+                ? String(args.aspect_ratio)
+                : undefined,
+            });
+            return { storyboard_id: storyboardId, video_generation_id: videoGenerationId };
+          },
+        },
+        generate_storyboard_tts: {
+          toolName: "generate_storyboard_tts",
+          description: "为镜头对白生成 TTS，更新镜头 tts_audio_url",
+          parameters: {
+            type: "object",
+            properties: {
+              storyboard_id: { type: "number" },
+              text: { type: "string" },
+              voice_id: { type: "string" },
+            },
+            required: ["storyboard_id"],
+          },
+          execute: async (args: any) => {
+            const storyboardId = Number(args?.storyboard_id || 0);
+            if (!storyboardId) throw new Error("storyboard_id is required");
+            const [sb] = db
+              .select()
+              .from(schema.storyboards)
+              .where(eq(schema.storyboards.id, storyboardId))
+              .all();
+            if (!sb) throw new Error(`Storyboard ${storyboardId} not found`);
+            const [ep] = db
+              .select()
+              .from(schema.episodes)
+              .where(eq(schema.episodes.id, sb.episodeId))
+              .all();
+            const text = String(args?.text || sb.dialogue || "").trim();
+            if (!text) throw new Error("text is required (or storyboard dialogue)");
+            const voiceId = String(args?.voice_id || "alloy");
+            const audioPath = await generateTTS({
+              text,
+              voice: voiceId,
+              configId: ep?.audioConfigId ?? null,
+            });
+            db.update(schema.storyboards)
+              .set({ ttsAudioUrl: audioPath })
+              .where(eq(schema.storyboards.id, storyboardId))
+              .run();
+            return {
+              storyboard_id: storyboardId,
+              tts_audio_url: audioPath,
+              voice_id: voiceId,
+            };
+          },
+        },
+        generate_character_voice_sample: {
+          toolName: "generate_character_voice_sample",
+          description: "为角色生成音色试听，更新角色 voice_sample_url",
+          parameters: {
+            type: "object",
+            properties: {
+              character_id: { type: "number" },
+              voice_id: { type: "string" },
+            },
+            required: ["character_id", "voice_id"],
+          },
+          execute: async (args: any) => {
+            const characterId = Number(args?.character_id || 0);
+            if (!characterId) throw new Error("character_id is required");
+            const voiceId = String(args?.voice_id || "").trim();
+            if (!voiceId) throw new Error("voice_id is required");
+            const [character] = db
+              .select()
+              .from(schema.characters)
+              .where(eq(schema.characters.id, characterId))
+              .all();
+            if (!character) throw new Error(`Character ${characterId} not found`);
+            const [ep] = db
+              .select()
+              .from(schema.episodes)
+              .where(eq(schema.episodes.id, episodeId))
+              .all();
+            const audioPath = await generateVoiceSample(
+              character.name,
+              voiceId,
+              ep?.audioConfigId ?? null,
+            );
+            db.update(schema.characters)
+              .set({
+                voiceStyle: voiceId,
+                voiceProvider: "orchestrator",
+                voiceSampleUrl: audioPath,
+              })
+              .where(eq(schema.characters.id, characterId))
+              .run();
+            return {
+              character_id: characterId,
+              voice_id: voiceId,
+              voice_sample_url: audioPath,
+            };
+          },
+        },
+        batch_generate_storyboard_tts: {
+          toolName: "batch_generate_storyboard_tts",
+          description: "批量为当前集镜头生成 TTS（仅处理有对白且未有音频的镜头）",
+          parameters: {
+            type: "object",
+            properties: {
+              storyboard_ids: { type: "array", items: { type: "number" } },
+            },
+          },
+          execute: async (args: any) => {
+            const inputIds = Array.isArray(args?.storyboard_ids)
+              ? args.storyboard_ids.map((id: any) => Number(id)).filter(Boolean)
+              : [];
+            const rows = db
+              .select()
+              .from(schema.storyboards)
+              .where(eq(schema.storyboards.episodeId, episodeId))
+              .all();
+            const targets = rows.filter((sb) => {
+              if (inputIds.length && !inputIds.includes(sb.id)) return false;
+              if (sb.ttsAudioUrl) return false;
+              return !!String(sb.dialogue || "").trim();
+            });
+            const started: Array<{ storyboard_id: number; tts_audio_url: string }> = [];
+            for (const sb of targets) {
+              const [ep] = db
+                .select()
+                .from(schema.episodes)
+                .where(eq(schema.episodes.id, sb.episodeId))
+                .all();
+              const audioPath = await generateTTS({
+                text: String(sb.dialogue || "").trim(),
+                voice: "alloy",
+                configId: ep?.audioConfigId ?? null,
+              });
+              db.update(schema.storyboards)
+                .set({ ttsAudioUrl: audioPath })
+                .where(eq(schema.storyboards.id, sb.id))
+                .run();
+              started.push({ storyboard_id: sb.id, tts_audio_url: audioPath });
+            }
+            return { count: started.length, started };
+          },
+        },
+        compose_storyboard: {
+          toolName: "compose_storyboard",
+          description: "合成单个镜头（视频+音频+字幕），返回 composed_video_url",
+          parameters: {
+            type: "object",
+            properties: {
+              storyboard_id: { type: "number" },
+            },
+            required: ["storyboard_id"],
+          },
+          execute: async (args: any) => {
+            const storyboardId = Number(args?.storyboard_id || 0);
+            if (!storyboardId) throw new Error("storyboard_id is required");
+            const composedVideoUrl = await composeStoryboard(storyboardId);
+            return {
+              storyboard_id: storyboardId,
+              composed_video_url: composedVideoUrl,
+            };
+          },
+        },
+        batch_compose_storyboards: {
+          toolName: "batch_compose_storyboards",
+          description: "批量合成当前集镜头（仅处理已有视频的镜头）",
+          parameters: {
+            type: "object",
+            properties: {
+              storyboard_ids: { type: "array", items: { type: "number" } },
+            },
+          },
+          execute: async (args: any) => {
+            const inputIds = Array.isArray(args?.storyboard_ids)
+              ? args.storyboard_ids.map((id: any) => Number(id)).filter(Boolean)
+              : [];
+            const rows = db
+              .select()
+              .from(schema.storyboards)
+              .where(eq(schema.storyboards.episodeId, episodeId))
+              .all();
+            const targets = rows.filter((sb) => {
+              if (inputIds.length && !inputIds.includes(sb.id)) return false;
+              return !!sb.videoUrl;
+            });
+            const completed: Array<{ storyboard_id: number; composed_video_url: string }> = [];
+            const failed: Array<{ storyboard_id: number; error: string }> = [];
+            for (const sb of targets) {
+              try {
+                const composedVideoUrl = await composeStoryboard(sb.id);
+                completed.push({ storyboard_id: sb.id, composed_video_url: composedVideoUrl });
+              } catch (err: any) {
+                failed.push({
+                  storyboard_id: sb.id,
+                  error: err?.message || String(err),
+                });
+              }
+            }
+            return {
+              total: targets.length,
+              completed: completed.length,
+              failed: failed.length,
+              completed_items: completed,
+              failed_items: failed,
+            };
+          },
+        },
+        merge_episode: {
+          toolName: "merge_episode",
+          description: "拼接当前集所有已合成镜头，返回 merge_id",
+          parameters: {
+            type: "object",
+            properties: {
+              episode_id: { type: "number" },
+              drama_id: { type: "number" },
+            },
+            additionalProperties: false,
+          },
+          execute: async (args: any) => {
+            const targetEpisodeId = args?.episode_id
+              ? Number(args.episode_id)
+              : episodeId;
+            const targetDramaId = args?.drama_id
+              ? Number(args.drama_id)
+              : dramaId;
+            const mergeId = await mergeEpisodeVideos(
+              targetEpisodeId,
+              targetDramaId,
+            );
+            return {
+              merge_id: mergeId,
+              status: "processing",
+            };
+          },
+        },
       };
       break;
     }
@@ -541,11 +1094,13 @@ export function createAgent(
 
         const calls = ai.tool_calls || [];
         if (!calls.length) {
+          const finalText =
+            typeof ai.content === "string"
+              ? ai.content
+              : JSON.stringify(ai.content);
+          await opts?.onEvent?.({ type: "final_text", text: finalText });
           return {
-            text:
-              typeof ai.content === "string"
-                ? ai.content
-                : JSON.stringify(ai.content),
+            text: finalText,
             toolCalls,
             toolResults,
           };
@@ -555,10 +1110,22 @@ export function createAgent(
           const toolName = String(call?.name || "");
           const args = (call?.args || {}) as Record<string, unknown>;
           toolCalls.push({ toolName, args });
+          await opts?.onEvent?.({
+            type: "tool_call",
+            step: step + 1,
+            toolName,
+            args,
+          });
           const tool = lcTools.find((t) => t.name === toolName);
           if (!tool) {
             const err = `Tool not found: ${toolName}`;
             toolResults.push({ toolName, error: err });
+            await opts?.onEvent?.({
+              type: "tool_result",
+              step: step + 1,
+              toolName,
+              error: err,
+            });
             conversation.push(
               new ToolMessage({ tool_call_id: call.id!, content: err }),
             );
@@ -567,6 +1134,12 @@ export function createAgent(
           try {
             const out = await tool.invoke(args);
             toolResults.push({ toolName, result: out });
+            await opts?.onEvent?.({
+              type: "tool_result",
+              step: step + 1,
+              toolName,
+              result: out,
+            });
             conversation.push(
               new ToolMessage({
                 tool_call_id: call.id!,
@@ -576,6 +1149,12 @@ export function createAgent(
           } catch (err: any) {
             const msg = err?.message || String(err);
             toolResults.push({ toolName, error: msg });
+            await opts?.onEvent?.({
+              type: "tool_result",
+              step: step + 1,
+              toolName,
+              error: msg,
+            });
             conversation.push(
               new ToolMessage({
                 tool_call_id: call.id!,
@@ -586,11 +1165,9 @@ export function createAgent(
         }
       }
 
-      return {
-        text: "Agent reached max steps without final answer.",
-        toolCalls,
-        toolResults,
-      };
+      const finalText = "Agent reached max steps without final answer.";
+      await opts?.onEvent?.({ type: "final_text", text: finalText });
+      return { text: finalText, toolCalls, toolResults };
     },
   };
 }

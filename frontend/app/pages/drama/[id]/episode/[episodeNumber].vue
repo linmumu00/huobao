@@ -21,6 +21,14 @@
 
       <div class="studio-topbar-side">
         <div class="studio-actions">
+          <button
+            class="btn"
+            :disabled="!epId"
+            @click="navigateTo(chatPageUrl)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            AI 对话
+          </button>
           <button class="btn" @click="refresh">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             刷新
@@ -1464,6 +1472,7 @@ const charsVoiced = computed(() => chars.value.filter(c => c.voice_style || c.vo
 const voiceSampleCount = computed(() => chars.value.filter(c => c.voice_sample_url || c.voiceSampleUrl).length)
 const composedCount = computed(() => sbs.value.filter(s => s.composed_video_url || s.composedVideoUrl).length)
 const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.mergedUrl || null)
+const chatPageUrl = computed(() => `/chat?dramaId=${dramaId}&episodeId=${epId.value || ''}`)
 
 const scriptStep = ref(0)
 const prodTab = ref('chars')

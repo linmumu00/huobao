@@ -1,6 +1,7 @@
 /**
  * FFmpeg 多镜头拼接 — 将所有合成后的镜头视频拼接为一集
  */
+import '../utils/ffmpeg-paths.js'
 import ffmpeg from 'fluent-ffmpeg'
 import fs from 'fs'
 import path from 'path'

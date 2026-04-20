@@ -1,7 +1,7 @@
 /**
  * Assistant UI 聊天壳（供 chat.vue 挂载），与 Vue 通过 props 传入 dramaId / episodeId。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AssistantRuntimeProvider,
   useAui,
@@ -10,262 +10,432 @@ import {
   MessagePrimitive,
   ComposerPrimitive,
   useMessagePartText,
-} from '@assistant-ui/react'
-import { renderMarkdown } from '~/lib/markdown'
+} from "@assistant-ui/react";
+import { renderMarkdown } from "~/lib/markdown";
 
 export type ChatAssistantProps = {
-  dramaId: string
-  episodeId: string
-  onAfterRun?: () => void | Promise<void>
-}
+  dramaId: string;
+  episodeId: string;
+  onAfterRun?: () => void | Promise<void>;
+};
 
 function parsePlanLines(text: string): string[] {
   return text
     .split(/\n/)
     .map((line) =>
       line
-        .replace(/^\s*[-*•]\s*/, '')
-        .replace(/^\d+[\.\)、]\s*/, '')
+        .replace(/^\s*[-*•]\s*/, "")
+        .replace(/^\d+[\.\)、]\s*/, "")
         .trim(),
     )
-    .filter(Boolean)
+    .filter(Boolean);
 }
 
-type ToolCallEntry = { toolName: string | null; args: unknown }
-type ToolResultEntry = { toolName: string | null; result: string }
+type ToolCallEntry = { toolName: string | null; args: unknown };
+type ToolResultEntry = { toolName: string | null; result: string };
+type TraceEventEntry = {
+  kind: "start" | "tool_call" | "tool_result" | "text" | "done" | "error";
+  label: string;
+  payload?: unknown;
+};
 
 type TraceState = {
-  toolCalls: ToolCallEntry[]
-  toolResults: ToolResultEntry[]
-} | null
+  toolCalls: ToolCallEntry[];
+  toolResults: ToolResultEntry[];
+  events: TraceEventEntry[];
+} | null;
 
 type PlanPanelProps = {
-  planText: string
-  setPlanText: (v: string) => void
-  setErrorMsg: (v: string) => void
-  idsReady: boolean
-}
+  planText: string;
+  setPlanText: (v: string) => void;
+  setErrorMsg: (v: string) => void;
+  idsReady: boolean;
+};
 
 /** 必须在 AssistantRuntimeProvider 内：一键执行用 thread.append 触发模型运行 */
-function PlanPanelInner({ planText, setPlanText, setErrorMsg, idsReady }: PlanPanelProps) {
-  const aui = useAui()
+function PlanPanelInner({
+  planText,
+  setPlanText,
+  setErrorMsg,
+  idsReady,
+}: PlanPanelProps) {
+  const aui = useAui();
 
   const onPreviewPlan = useCallback(() => {
-    setErrorMsg('')
+    setErrorMsg("");
     const ta =
-      document.querySelector<HTMLTextAreaElement>('.aui-composer textarea') ||
-      document.querySelector<HTMLTextAreaElement>('textarea[name="input"]')
-    const src = ta?.value?.trim() || ''
+      document.querySelector<HTMLTextAreaElement>(".aui-composer textarea") ||
+      document.querySelector<HTMLTextAreaElement>('textarea[name="input"]');
+    const src = ta?.value?.trim() || "";
     if (!src) {
-      setErrorMsg('请先在下方输入框中填写任务描述')
-      return
+      setErrorMsg("请先在下方输入框中填写任务描述");
+      return;
     }
-    const lines = parsePlanLines(src)
-    setPlanText(lines.map((l, i) => `${i + 1}. ${l}`).join('\n'))
-  }, [setErrorMsg, setPlanText])
+    const lines = parsePlanLines(src);
+    setPlanText(lines.map((l, i) => `${i + 1}. ${l}`).join("\n"));
+  }, [setErrorMsg, setPlanText]);
 
   const onExecutePlan = useCallback(() => {
-    const msg = planText.trim()
+    const msg = planText.trim();
     if (!msg) {
-      setErrorMsg('请填写执行计划预览内容，或先「从输入生成预览」')
-      return
+      setErrorMsg("请填写执行计划预览内容，或先「从输入生成预览」");
+      return;
     }
     if (!idsReady) {
-      setErrorMsg('请先在左侧选择项目与剧集')
-      return
+      setErrorMsg("请先在左侧选择项目与剧集");
+      return;
     }
-    setErrorMsg('')
+    setErrorMsg("");
     aui.thread().append({
-      role: 'user',
-      content: [{ type: 'text', text: msg }],
-    })
-  }, [aui, idsReady, planText, setErrorMsg])
+      role: "user",
+      content: [{ type: "text", text: msg }],
+    });
+  }, [aui, idsReady, planText, setErrorMsg]);
 
   return React.createElement(
-    'div',
-    { className: 'aui-plan-panel' },
+    "div",
+    { className: "aui-plan-panel" },
     React.createElement(
-      'div',
-      { className: 'aui-plan-head' },
-      React.createElement('div', { className: 'aui-plan-title' }, '执行计划预览'),
+      "div",
+      { className: "aui-plan-head" },
       React.createElement(
-        'div',
-        { className: 'aui-plan-actions' },
+        "div",
+        { className: "aui-plan-title" },
+        "执行计划预览",
+      ),
+      React.createElement(
+        "div",
+        { className: "aui-plan-actions" },
         React.createElement(
-          'button',
-          { type: 'button', className: 'aui-btn', onClick: onPreviewPlan },
-          '从输入生成预览',
+          "button",
+          { type: "button", className: "aui-btn", onClick: onPreviewPlan },
+          "从输入生成预览",
         ),
         React.createElement(
-          'button',
-          { type: 'button', className: 'aui-btn aui-btn-primary', onClick: onExecutePlan },
-          '一键执行',
+          "button",
+          {
+            type: "button",
+            className: "aui-btn aui-btn-primary",
+            onClick: onExecutePlan,
+          },
+          "一键执行",
         ),
       ),
     ),
-    React.createElement('textarea', {
-      className: 'aui-plan-textarea',
-      placeholder: '点击「从输入生成预览」将下方输入框按行拆解为步骤；也可直接编辑。',
+    React.createElement("textarea", {
+      className: "aui-plan-textarea",
+      placeholder:
+        "点击「从输入生成预览」将下方输入框按行拆解为步骤；也可直接编辑。",
       value: planText,
-      onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setPlanText(e.target.value),
+      onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) =>
+        setPlanText(e.target.value),
     }),
     !planText.trim()
       ? React.createElement(
-          'div',
-          { className: 'aui-plan-empty' },
-          '一键执行将把上方文本作为用户消息发给 Agent（与点「发送」等价）。',
+          "div",
+          { className: "aui-plan-empty" },
+          "一键执行将把上方文本作为用户消息发给 Agent（与点「发送」等价）。",
         )
       : null,
-  )
+  );
 }
 
 type HistoryLoaderProps = {
-  dramaId: string
-  episodeId: string
-  setErrorMsg: (v: string) => void
-}
+  dramaId: string;
+  episodeId: string;
+  setErrorMsg: (v: string) => void;
+};
 
 /** 必须在 AssistantRuntimeProvider 内：用 thread.reset 灌入历史对话 */
-function HistoryLoaderInner({ dramaId, episodeId, setErrorMsg }: HistoryLoaderProps) {
-  const aui = useAui()
+function HistoryLoaderInner({
+  dramaId,
+  episodeId,
+  setErrorMsg,
+}: HistoryLoaderProps) {
+  const aui = useAui();
 
   useEffect(() => {
-    const drId = Number(dramaId)
-    const epId = Number(episodeId)
+    const drId = Number(dramaId);
+    const epId = Number(episodeId);
     if (!drId || !epId) {
       // 清空线程
-      aui.thread().reset([])
-      return
+      aui.thread().reset([]);
+      return;
     }
 
-    const controller = new AbortController()
-    ;(async () => {
+    const controller = new AbortController();
+    (async () => {
       try {
-        const resp = await fetch(`/api/v1/chat/messages?drama_id=${drId}&episode_id=${epId}&limit=200`, {
-          signal: controller.signal,
-        })
-        const json = await resp.json()
+        const resp = await fetch(
+          `/api/v1/chat/messages?drama_id=${drId}&episode_id=${epId}&limit=200`,
+          {
+            signal: controller.signal,
+          },
+        );
+        const json = await resp.json();
         if (!resp.ok || (json?.code && json.code >= 400)) {
-          throw new Error(json?.message || `历史加载失败: ${resp.status}`)
+          throw new Error(json?.message || `历史加载失败: ${resp.status}`);
         }
-        const rows = Array.isArray(json?.data) ? json.data : (Array.isArray(json) ? json : [])
+        const rows = Array.isArray(json?.data)
+          ? json.data
+          : Array.isArray(json)
+            ? json
+            : [];
         const initial = rows.map((r: any) => ({
           role: r.role,
-          content: [{ type: 'text', text: r.content || '' }],
+          content: [{ type: "text", text: r.content || "" }],
           // 避免历史 user 消息触发 run
           startRun: false,
-        }))
-        aui.thread().reset(initial)
+        }));
+        aui.thread().reset(initial);
       } catch (e: any) {
-        if (e?.name === 'AbortError') return
-        setErrorMsg(e?.message || '历史对话加载失败')
+        if (e?.name === "AbortError") return;
+        setErrorMsg(e?.message || "历史对话加载失败");
       }
-    })()
+    })();
 
-    return () => controller.abort()
-  }, [aui, dramaId, episodeId, setErrorMsg])
+    return () => controller.abort();
+  }, [aui, dramaId, episodeId, setErrorMsg]);
 
-  return null
+  return null;
 }
 
 function MarkdownTextPart() {
-  const { text } = useMessagePartText()
-  return React.createElement('div', {
-    className: 'aui-md',
-    dangerouslySetInnerHTML: { __html: renderMarkdown(text || '') },
-  })
+  const { text } = useMessagePartText();
+  return React.createElement("div", {
+    className: "aui-md",
+    dangerouslySetInnerHTML: { __html: renderMarkdown(text || "") },
+  });
 }
 
 export function createChatAssistantApp() {
-  return function ChatAssistantApp({ dramaId, episodeId, onAfterRun }: ChatAssistantProps) {
-    const [errorMsg, setErrorMsg] = useState('')
-    const [planText, setPlanText] = useState('')
-    const [trace, setTrace] = useState<TraceState>(null)
+  return function ChatAssistantApp({
+    dramaId,
+    episodeId,
+    onAfterRun,
+  }: ChatAssistantProps) {
+    const [errorMsg, setErrorMsg] = useState("");
+    const [planText, setPlanText] = useState("");
+    const [trace, setTrace] = useState<TraceState>(null);
 
     const idsReady = useMemo(
-      () => Boolean(dramaId && episodeId && Number(dramaId) > 0 && Number(episodeId) > 0),
+      () =>
+        Boolean(
+          dramaId && episodeId && Number(dramaId) > 0 && Number(episodeId) > 0,
+        ),
       [dramaId, episodeId],
-    )
+    );
 
     const runtime = useLocalRuntime({
-      async run({ messages, abortSignal }: any) {
-        setErrorMsg('')
-        setTrace(null)
-        const last = [...messages].reverse().find((msg: any) => msg?.role === 'user')
+      async *run({ messages, abortSignal }: any) {
+        setErrorMsg("");
+        setTrace(null);
+        const last = [...messages]
+          .reverse()
+          .find((msg: any) => msg?.role === "user");
         const latestText = Array.isArray(last?.content)
           ? last.content
-              .filter((p: any) => p?.type === 'text')
-              .map((p: any) => p.text || '')
-              .join('\n')
-          : ''
+              .filter((p: any) => p?.type === "text")
+              .map((p: any) => p.text || "")
+              .join("\n")
+          : "";
 
         const payload = {
           message: latestText,
           drama_id: Number(dramaId),
           episode_id: Number(episodeId),
-        }
+        };
         if (!payload.drama_id || !payload.episode_id) {
-          throw new Error('请先在左侧选择项目与剧集')
+          throw new Error("请先在左侧选择项目与剧集");
         }
 
-        const resp = await fetch(`/api/v1/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const resp = await fetch(`/api/v1/chat?stream=1`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
           body: JSON.stringify(payload),
           signal: abortSignal,
-        })
-        const json = await resp.json()
-        if (!resp.ok || (json?.code && json.code >= 400)) {
-          const msg = json?.message || `请求失败: ${resp.status}`
-          setErrorMsg(msg)
-          throw new Error(msg)
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          const msg = text || `请求失败: ${resp.status}`;
+          setErrorMsg(msg);
+          throw new Error(msg);
         }
+        if (!resp.body) throw new Error("流式响应为空");
 
-        const data = json?.data ?? json
-        const toolCalls = Array.isArray(data?.toolCalls) ? data.toolCalls : []
-        const toolResults = Array.isArray(data?.toolResults) ? data.toolResults : []
-        setTrace({ toolCalls, toolResults })
+        let finalPayload: any = null;
+        let finalText = "";
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        setTrace({ toolCalls: [], toolResults: [], events: [] });
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split("\n\n");
+          buffer = blocks.pop() || "";
+          for (const block of blocks) {
+            const lines = block.split("\n");
+            const eventLine = lines.find((l) => l.startsWith("event:"));
+            const dataLine = lines.find((l) => l.startsWith("data:"));
+            if (!eventLine || !dataLine) continue;
+            const event = eventLine.slice(6).trim();
+            let data: any = null;
+            try {
+              data = JSON.parse(dataLine.slice(5).trim());
+            } catch {}
+
+            if (event === "start") {
+              setTrace((prev) => ({
+                toolCalls: prev?.toolCalls || [],
+                toolResults: prev?.toolResults || [],
+                events: [
+                  ...(prev?.events || []),
+                  { kind: "start", label: "开始执行", payload: data },
+                ],
+              }));
+            } else if (event === "tool_call") {
+              const toolName = data?.toolName || null;
+              const args = data?.args ?? null;
+              setTrace((prev) => ({
+                toolCalls: [...(prev?.toolCalls || []), { toolName, args }],
+                toolResults: prev?.toolResults || [],
+                events: [
+                  ...(prev?.events || []),
+                  {
+                    kind: "tool_call",
+                    label: `调用 ${toolName || "(unknown tool)"}`,
+                    payload: data,
+                  },
+                ],
+              }));
+            } else if (event === "tool_result") {
+              const toolName = data?.toolName || null;
+              const result = String(data?.result || "");
+              setTrace((prev) => ({
+                toolCalls: prev?.toolCalls || [],
+                toolResults: [
+                  ...(prev?.toolResults || []),
+                  { toolName, result },
+                ],
+                events: [
+                  ...(prev?.events || []),
+                  {
+                    kind: "tool_result",
+                    label: `返回 ${toolName || "(unknown tool)"}`,
+                    payload: data,
+                  },
+                ],
+              }));
+            } else if (event === "text") {
+              finalText = String(data?.text || "");
+              setTrace((prev) => ({
+                toolCalls: prev?.toolCalls || [],
+                toolResults: prev?.toolResults || [],
+                events: [
+                  ...(prev?.events || []),
+                  {
+                    kind: "text",
+                    label: "生成回复文本",
+                    payload: { text: finalText },
+                  },
+                ],
+              }));
+            } else if (event === "text_delta") {
+              const delta = String(data?.delta || "");
+              if (delta) {
+                finalText += delta;
+                yield {
+                  content: [{ type: "text", text: finalText }],
+                };
+              }
+            } else if (event === "done") {
+              finalPayload = data;
+              finalText = String(data?.text || finalText || "");
+              setTrace((prev) => ({
+                toolCalls: prev?.toolCalls || [],
+                toolResults: prev?.toolResults || [],
+                events: [
+                  ...(prev?.events || []),
+                  { kind: "done", label: "执行完成", payload: data },
+                ],
+              }));
+            } else if (event === "error") {
+              const msg = data?.message || "执行失败";
+              setTrace((prev) => ({
+                toolCalls: prev?.toolCalls || [],
+                toolResults: prev?.toolResults || [],
+                events: [
+                  ...(prev?.events || []),
+                  { kind: "error", label: msg, payload: data },
+                ],
+              }));
+              setErrorMsg(msg);
+              throw new Error(msg);
+            }
+          }
+        }
+        const data = finalPayload || {};
 
         // 通知外层（Vue）刷新上下文/进度
-        try { await onAfterRun?.() } catch {}
+        try {
+          await onAfterRun?.();
+        } catch {}
 
-        return {
-          content: [{ type: 'text', text: data?.text || '' }],
-        }
+        yield {
+          content: [{ type: "text", text: finalText || data?.text || "" }],
+        };
       },
-    })
+    });
 
     return React.createElement(
-      'div',
-      { className: 'aui-shell' },
+      "div",
+      { className: "aui-shell" },
       React.createElement(
-        'div',
-        { className: 'aui-toolbar' },
-        React.createElement('div', { className: 'aui-field' },
-          React.createElement('span', null, 'Agent'),
-          React.createElement('input', { value: 'chat_orchestrator', readOnly: true }),
+        "div",
+        { className: "aui-toolbar" },
+        React.createElement(
+          "div",
+          { className: "aui-field" },
+          React.createElement("span", null, "Agent"),
+          React.createElement("input", {
+            value: "chat_orchestrator",
+            readOnly: true,
+          }),
         ),
         React.createElement(
-          'label',
-          { className: 'aui-field' },
-          React.createElement('span', null, 'drama_id'),
-          React.createElement('input', { value: dramaId || '—', readOnly: true }),
+          "label",
+          { className: "aui-field" },
+          React.createElement("span", null, "drama_id"),
+          React.createElement("input", {
+            value: dramaId || "—",
+            readOnly: true,
+          }),
         ),
         React.createElement(
-          'label',
-          { className: 'aui-field' },
-          React.createElement('span', null, 'episode_id'),
-          React.createElement('input', { value: episodeId || '—', readOnly: true }),
+          "label",
+          { className: "aui-field" },
+          React.createElement("span", null, "episode_id"),
+          React.createElement("input", {
+            value: episodeId || "—",
+            readOnly: true,
+          }),
         ),
       ),
-      React.createElement(
-        'div',
-        { className: 'aui-hint' },
-        idsReady
-          ? '下方输入任务说明；可先「从输入生成预览」确认步骤，再「一键执行」或直接在输入框点发送。'
-          : '请先在左栏选择项目与剧集。',
-      ),
-      errorMsg ? React.createElement('div', { className: 'aui-error' }, errorMsg) : null,
+      // React.createElement(
+      //   "div",
+      //   { className: "aui-hint" },
+      //   idsReady
+      //     ? "下方输入任务说明；可先「从输入生成预览」确认步骤，再「一键执行」或直接在输入框点发送。"
+      //     : "请先在左栏选择项目与剧集。",
+      // ),
+      errorMsg
+        ? React.createElement("div", { className: "aui-error" }, errorMsg)
+        : null,
       React.createElement(
         AssistantRuntimeProvider,
         { runtime },
@@ -274,42 +444,46 @@ export function createChatAssistantApp() {
           episodeId,
           setErrorMsg,
         }),
-        React.createElement(PlanPanelInner, {
-          planText,
-          setPlanText,
-          setErrorMsg,
-          idsReady,
-        }),
+        // React.createElement(PlanPanelInner, {
+        //   planText,
+        //   setPlanText,
+        //   setErrorMsg,
+        //   idsReady,
+        // }),
         React.createElement(
-          'div',
-          { className: 'aui-thread-wrap' },
+          "div",
+          { className: "aui-thread-wrap" },
           React.createElement(
             ThreadPrimitive.Root,
-            { className: 'aui-thread' },
+            { className: "aui-thread" },
             React.createElement(
               ThreadPrimitive.Viewport,
-              { className: 'aui-viewport' },
-              React.createElement((ThreadPrimitive.Messages as any), {
+              { className: "aui-viewport" },
+              React.createElement(ThreadPrimitive.Messages as any, {
                 children: () =>
                   React.createElement(
                     MessagePrimitive.Root,
-                    { className: 'aui-message-row' },
+                    { className: "aui-message-row" },
                     React.createElement(
                       MessagePrimitive.If,
                       { user: true },
                       React.createElement(
-                        'div',
-                        { className: 'aui-message user' },
-                        React.createElement(MessagePrimitive.Parts, { components: { Text: MarkdownTextPart } }),
+                        "div",
+                        { className: "aui-message user" },
+                        React.createElement(MessagePrimitive.Parts, {
+                          components: { Text: MarkdownTextPart },
+                        }),
                       ),
                     ),
                     React.createElement(
                       MessagePrimitive.If,
                       { assistant: true },
                       React.createElement(
-                        'div',
-                        { className: 'aui-message assistant' },
-                        React.createElement(MessagePrimitive.Parts, { components: { Text: MarkdownTextPart } }),
+                        "div",
+                        { className: "aui-message assistant" },
+                        React.createElement(MessagePrimitive.Parts, {
+                          components: { Text: MarkdownTextPart },
+                        }),
                       ),
                     ),
                   ),
@@ -317,53 +491,103 @@ export function createChatAssistantApp() {
             ),
             React.createElement(
               ThreadPrimitive.ViewportFooter,
-              { className: 'aui-footer' },
+              { className: "aui-footer" },
               React.createElement(
                 ComposerPrimitive.Root,
-                { className: 'aui-composer' },
+                { className: "aui-composer" },
                 React.createElement(ComposerPrimitive.Input, {
-                  className: 'aui-input',
-                  name: 'input',
-                  placeholder: '输入你想执行的生产任务…',
+                  className: "aui-input",
+                  name: "input",
+                  placeholder: "输入你想执行的生产任务…",
                   rows: 3,
                 }),
-                React.createElement('button', { type: 'submit', className: 'aui-send' }, '发送'),
+                React.createElement(
+                  "button",
+                  { type: "submit", className: "aui-send" },
+                  "发送",
+                ),
               ),
             ),
           ),
         ),
       ),
       React.createElement(
-        'div',
-        { className: 'aui-trace' },
-        React.createElement('div', { className: 'aui-trace-head' }, '工具调用追踪（最近一次）'),
-        !trace || (!trace.toolCalls?.length && !trace.toolResults?.length)
+        "div",
+        { className: "aui-trace" },
+        React.createElement(
+          "div",
+          { className: "aui-trace-head" },
+          "工具调用追踪（最近一次）",
+        ),
+        !trace ||
+          (!trace.events?.length &&
+            !trace.toolCalls?.length &&
+            !trace.toolResults?.length)
           ? React.createElement(
-              'div',
-              { className: 'aui-trace-empty' },
-              '尚无执行记录；成功调用 Agent 后在此展示 toolCalls / toolResults。',
+              "div",
+              { className: "aui-trace-empty" },
+              "尚无执行记录；成功调用 Agent 后在此展示 toolCalls / toolResults。",
             )
           : React.createElement(
-              'div',
-              { className: 'aui-trace-list' },
-              trace.toolCalls.map((tc, i) =>
+              "div",
+              { className: "aui-trace-list" },
+              trace.events.map((ev, i) =>
                 React.createElement(
-                  'details',
-                  { key: `call-${i}`, className: 'aui-trace-item', open: i === 0 },
+                  "details",
+                  {
+                    key: `ev-${i}`,
+                    className: "aui-trace-item",
+                    open: i === trace.events.length - 1,
+                  },
                   React.createElement(
-                    'summary',
+                    "summary",
                     null,
-                    React.createElement('span', { className: 'aui-trace-badge' }, 'call'),
-                    tc.toolName || '(unknown tool)',
+                    React.createElement(
+                      "span",
+                      { className: "aui-trace-badge" },
+                      ev.kind,
+                    ),
+                    ev.label,
                   ),
                   React.createElement(
-                    'div',
-                    { className: 'aui-trace-body' },
-                    React.createElement('div', null, '参数 args'),
+                    "div",
+                    { className: "aui-trace-body" },
                     React.createElement(
-                      'pre',
-                      { className: 'aui-trace-pre' },
-                      typeof tc.args === 'string'
+                      "pre",
+                      { className: "aui-trace-pre" },
+                      typeof ev.payload === "string"
+                        ? ev.payload
+                        : JSON.stringify(ev.payload || {}, null, 2),
+                    ),
+                  ),
+                ),
+              ),
+              trace.toolCalls.map((tc, i) =>
+                React.createElement(
+                  "details",
+                  {
+                    key: `call-${i}`,
+                    className: "aui-trace-item",
+                    open: i === 0,
+                  },
+                  React.createElement(
+                    "summary",
+                    null,
+                    React.createElement(
+                      "span",
+                      { className: "aui-trace-badge" },
+                      "call",
+                    ),
+                    tc.toolName || "(unknown tool)",
+                  ),
+                  React.createElement(
+                    "div",
+                    { className: "aui-trace-body" },
+                    React.createElement("div", null, "参数 args"),
+                    React.createElement(
+                      "pre",
+                      { className: "aui-trace-pre" },
+                      typeof tc.args === "string"
                         ? tc.args
                         : JSON.stringify(tc.args, null, 2),
                     ),
@@ -372,23 +596,31 @@ export function createChatAssistantApp() {
               ),
               trace.toolResults.map((tr, i) =>
                 React.createElement(
-                  'details',
-                  { key: `res-${i}`, className: 'aui-trace-item', open: false },
+                  "details",
+                  { key: `res-${i}`, className: "aui-trace-item", open: false },
                   React.createElement(
-                    'summary',
+                    "summary",
                     null,
-                    React.createElement('span', { className: 'aui-trace-badge' }, 'result'),
-                    tr.toolName || '(unknown tool)',
+                    React.createElement(
+                      "span",
+                      { className: "aui-trace-badge" },
+                      "result",
+                    ),
+                    tr.toolName || "(unknown tool)",
                   ),
                   React.createElement(
-                    'div',
-                    { className: 'aui-trace-body' },
-                    React.createElement('pre', { className: 'aui-trace-pre' }, tr.result),
+                    "div",
+                    { className: "aui-trace-body" },
+                    React.createElement(
+                      "pre",
+                      { className: "aui-trace-pre" },
+                      tr.result,
+                    ),
                   ),
                 ),
               ),
             ),
       ),
-    )
-  }
+    );
+  };
 }

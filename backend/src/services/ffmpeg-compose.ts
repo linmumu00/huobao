@@ -1,6 +1,7 @@
 /**
  * FFmpeg 单镜头合成 — 视频 + TTS音频 + 烧录字幕
  */
+import { getResolvedFfmpegPath } from '../utils/ffmpeg-paths.js'
 import ffmpeg from 'fluent-ffmpeg'
 import fs from 'fs'
 import path from 'path'
@@ -29,7 +30,7 @@ function toAbsPath(relativePath: string): string {
 function supportsSubtitleFilter(): boolean {
   if (subtitleFilterSupport != null) return subtitleFilterSupport
   try {
-    const output = execFileSync('ffmpeg', ['-hide_banner', '-filters'], { encoding: 'utf8' })
+    const output = execFileSync(getResolvedFfmpegPath(), ['-hide_banner', '-filters'], { encoding: 'utf8' })
     subtitleFilterSupport = /\bsubtitles\b/.test(output)
   } catch {
     subtitleFilterSupport = false

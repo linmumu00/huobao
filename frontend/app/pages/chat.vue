@@ -85,7 +85,16 @@
           </div>
 
           <div v-if="pipelineSteps.length" class="ctx-pipeline">
-            <div class="ctx-pipeline-title">流水线进度</div>
+            <div class="ctx-pipeline-head">
+              <div class="ctx-pipeline-title">流水线进度</div>
+              <button
+                class="btn btn-sm ctx-enter-studio"
+                :disabled="!studioEpisodeNumber"
+                @click="goToStudioPage"
+              >
+                进入专业制作
+              </button>
+            </div>
             <ul class="ctx-pipeline-list">
               <li
                 v-for="row in pipelineSteps"
@@ -137,7 +146,300 @@
         <div v-else-if="stepError" class="ctx-error">{{ stepError }}</div>
 
         <div v-else class="ctx-modal-body">
-          <div class="ctx-md" v-html="renderMarkdown(stepMarkdown)"></div>
+          <template v-if="stepViewType === 'script'">
+            <div class="ctx-script-grid">
+              <section class="card ctx-script-card">
+                <div class="extract-card-head"><span>原始内容</span></div>
+                <pre class="ctx-pre">{{ stepData?.raw || "—" }}</pre>
+              </section>
+              <section class="card ctx-script-card">
+                <div class="extract-card-head"><span>格式化剧本</span></div>
+                <pre class="ctx-pre">{{ stepData?.script || "—" }}</pre>
+              </section>
+            </div>
+          </template>
+
+          <template v-else-if="stepViewType === 'extract'">
+            <div class="extract-stage">
+              <aside class="card extract-summary">
+                <div class="extract-summary-kicker">Extraction Board</div>
+                <div class="extract-summary-title">角色与场景结果</div>
+                <div class="extract-summary-desc">
+                  与剧集页一致展示提取结构，便于快速核查角色和场景数据。
+                </div>
+                <div class="extract-summary-stats">
+                  <div class="extract-summary-stat">
+                    <span>角色</span
+                    ><strong>{{ stepData?.characters?.length || 0 }}</strong>
+                  </div>
+                  <div class="extract-summary-stat">
+                    <span>场景</span
+                    ><strong>{{ stepData?.scenes?.length || 0 }}</strong>
+                  </div>
+                </div>
+              </aside>
+              <div class="card extract-card">
+                <div class="extract-card-head">
+                  <span>角色</span
+                  ><span class="tag tag-accent">{{
+                    stepData?.characters?.length || 0
+                  }}</span>
+                </div>
+                <div class="extract-list">
+                  <div
+                    v-for="c in stepData?.characters || []"
+                    :key="c.id || c.name"
+                    class="extract-row"
+                  >
+                    <div class="char-avatar">{{ c.name?.[0] || "?" }}</div>
+                    <div class="extract-info">
+                      <div class="extract-name-row">
+                        <div class="extract-name">{{ c.name || "未命名" }}</div>
+                        <span class="tag">{{ c.role || "角色" }}</span>
+                      </div>
+                      <div class="extract-meta wrap">
+                        {{
+                          c.description ||
+                          c.appearance ||
+                          c.personality ||
+                          "暂无描述"
+                        }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="card extract-card">
+                <div class="extract-card-head">
+                  <span>场景</span
+                  ><span class="tag tag-accent">{{
+                    stepData?.scenes?.length || 0
+                  }}</span>
+                </div>
+                <div class="extract-list">
+                  <div
+                    v-for="s in stepData?.scenes || []"
+                    :key="s.id || `${s.location}-${s.time}`"
+                    class="extract-row"
+                  >
+                    <div class="scene-icon">场</div>
+                    <div class="extract-info">
+                      <div class="extract-name-row">
+                        <div class="extract-name">
+                          {{ s.location || "未命名场景" }}
+                        </div>
+                        <span class="tag">{{ s.time || "—" }}</span>
+                      </div>
+                      <div class="extract-meta wrap">
+                        {{ s.description || "等待补充场景描述" }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="stepViewType === 'voice'">
+            <div class="voice-stage">
+              <aside class="card voice-stage-panel">
+                <div class="voice-stage-kicker">Voice Casting</div>
+                <div class="voice-stage-title">角色声音分配台</div>
+                <div class="voice-stage-stats">
+                  <div class="voice-stage-stat">
+                    <span class="voice-stage-stat-label">已分配</span
+                    ><strong
+                      >{{ stepData?.voicedCount || 0 }}/{{
+                        stepData?.characters?.length || 0
+                      }}</strong
+                    >
+                  </div>
+                  <div class="voice-stage-stat">
+                    <span class="voice-stage-stat-label">试听文件</span
+                    ><strong
+                      >{{ stepData?.sampleCount || 0 }}/{{
+                        stepData?.voicedCount || 0
+                      }}</strong
+                    >
+                  </div>
+                </div>
+              </aside>
+              <div class="voice-grid">
+                <div
+                  v-for="c in stepData?.characters || []"
+                  :key="c.id || c.name"
+                  class="card voice-card"
+                >
+                  <div class="voice-char">
+                    <div class="char-avatar lg">{{ c.name?.[0] || "?" }}</div>
+                    <div class="voice-name">
+                      <div class="voice-name-row">
+                        <div class="extract-name">{{ c.name || "未命名" }}</div>
+                        <span
+                          class="tag"
+                          :class="
+                            c.voice_style || c.voiceStyle ? 'tag-success' : ''
+                          "
+                          >{{
+                            c.voice_style || c.voiceStyle ? "已分配" : "待分配"
+                          }}</span
+                        >
+                      </div>
+                      <div class="extract-meta">{{ c.role || "角色" }}</div>
+                    </div>
+                  </div>
+                  <div class="voice-card-text">
+                    {{
+                      c.description ||
+                      c.personality ||
+                      c.appearance ||
+                      "暂无角色描述，可根据人物定位手动挑选音色。"
+                    }}
+                  </div>
+                  <div class="voice-profile-card">
+                    <div class="voice-profile-head">
+                      <span class="voice-profile-name">{{
+                        c.voice_style || c.voiceStyle || "—"
+                      }}</span
+                      ><span class="tag">{{
+                        c.voice_provider || c.voiceProvider || "—"
+                      }}</span>
+                    </div>
+                    <div
+                      v-if="c.voice_sample_url || c.voiceSampleUrl"
+                      class="voice-player"
+                    >
+                      <audio
+                        :src="'/' + (c.voice_sample_url || c.voiceSampleUrl)"
+                        controls
+                        preload="none"
+                      />
+                    </div>
+                    <div v-else class="voice-profile-fit">未生成试听文件</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="stepViewType === 'storyboard'">
+            <div class="split-layout">
+              <div class="shot-list">
+                <div class="shot-list-head">
+                  <div>
+                    <div class="shot-list-title">镜头序列</div>
+                    <div class="shot-list-sub">
+                      按镜头顺序检查内容与素材状态
+                    </div>
+                  </div>
+                </div>
+                <div class="shot-list-body">
+                  <div
+                    v-for="(sb, i) in stepData?.storyboards || []"
+                    :key="sb.id || i"
+                    :class="[
+                      'shot-item',
+                      { active: selectedPreviewStoryboardId === (sb.id || i) },
+                    ]"
+                    @click="selectedPreviewStoryboardId = sb.id || i"
+                  >
+                    <div class="shot-item-header">
+                      <div class="shot-num">
+                        #{{ String(Number(i) + 1).padStart(2, "0") }}
+                      </div>
+                      <span class="tag" style="font-size: 10px">{{
+                        sb.shot_type || sb.shotType || "—"
+                      }}</span>
+                    </div>
+                    <div class="shot-desc">
+                      {{ sb.description || sb.title || "无描述" }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="detail-panel" v-if="selectedPreviewStoryboard">
+                <div class="card ctx-detail-card">
+                  <div class="extract-card-head">
+                    <span>镜头详情</span
+                    ><span class="tag mono"
+                      >{{ selectedPreviewStoryboard.duration || 10 }}s</span
+                    >
+                  </div>
+                  <div class="ctx-detail-grid">
+                    <div>
+                      <strong>标题：</strong
+                      >{{ selectedPreviewStoryboard.title || "—" }}
+                    </div>
+                    <div>
+                      <strong>场景：</strong
+                      >{{ selectedPreviewStoryboard.location || "—" }} ·
+                      {{ selectedPreviewStoryboard.time || "—" }}
+                    </div>
+                    <div>
+                      <strong>概述：</strong
+                      >{{ selectedPreviewStoryboard.description || "—" }}
+                    </div>
+                    <div>
+                      <strong>对白：</strong
+                      >{{ selectedPreviewStoryboard.dialogue || "—" }}
+                    </div>
+                    <div>
+                      <strong>视频提示词：</strong
+                      >{{
+                        selectedPreviewStoryboard.video_prompt ||
+                        selectedPreviewStoryboard.videoPrompt ||
+                        "—"
+                      }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="stepViewType === 'assets'">
+            <div class="prod-grid">
+              <div
+                v-for="(sb, i) in stepData?.storyboards || []"
+                :key="sb.id || i"
+                class="card ctx-prod-card"
+              >
+                <div class="extract-card-head">
+                  <span>镜头 #{{ String(Number(i) + 1).padStart(2, "0") }}</span
+                  ><span class="tag">{{ sb.title || "镜头" }}</span>
+                </div>
+                <div class="ctx-prod-body">
+                  <div v-for="line in sb.assetLines || []" :key="line.label">
+                    <strong>{{ line.label }}：</strong>{{ line.value }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="stepViewType === 'merge'">
+            <div class="export-stage">
+              <div class="card export-hero">
+                <div class="extract-card-head"><span>整集导出状态</span></div>
+                <div class="export-meta">
+                  <span class="tag mono"
+                    >已合成 {{ stepData?.composed || 0 }}/{{
+                      stepData?.total || 0
+                    }}</span
+                  ><span class="dim"
+                    >合并视频：{{ stepData?.mergeUrl || "—" }}</span
+                  >
+                </div>
+                <pre class="ctx-pre">{{
+                  JSON.stringify(stepData?.raw || {}, null, 2)
+                }}</pre>
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="ctx-md" v-html="renderMarkdown(stepMarkdown)"></div>
+          </template>
         </div>
       </div>
     </div>
@@ -153,6 +455,7 @@ import { renderMarkdown } from "~/lib/markdown";
 const STORAGE_KEY = "huobao.chat.selection.v1";
 
 const mountEl = ref<HTMLElement | null>(null);
+const route = useRoute();
 let root: { render: (node: any) => void; unmount: () => void } | null = null;
 
 const dramas = ref<any[]>([]);
@@ -170,6 +473,7 @@ const stepKey = ref<string>("");
 const stepLoading = ref(false);
 const stepError = ref("");
 const stepData = ref<any>(null);
+const selectedPreviewStoryboardId = ref<any>(null);
 
 const stepTitle = computed(() => {
   const row = pipelineSteps.value.find((r) => r.key === stepKey.value);
@@ -196,6 +500,17 @@ const stepMarkdown = computed(() => {
   }
   return stepData.value?.markdown || "—";
 });
+const stepViewType = computed(() => stepData.value?.type || "markdown");
+const selectedPreviewStoryboard = computed(() => {
+  const list = stepData.value?.storyboards;
+  if (!Array.isArray(list) || !list.length) return null;
+  return (
+    list.find(
+      (sb: any, i: number) =>
+        (sb.id || i) === selectedPreviewStoryboardId.value,
+    ) || list[0]
+  );
+});
 
 const currentDrama = computed(() =>
   dramas.value.find((d) => String(d.id) === selectedDramaId.value),
@@ -204,9 +519,26 @@ const currentEpisodes = computed(() => {
   const eps = currentDrama.value?.episodes;
   return Array.isArray(eps) ? eps : [];
 });
+const studioEpisodeNumber = computed(() => {
+  const selected = currentEpisodes.value.find(
+    (e: any) => String(e.id) === selectedEpisodeId.value,
+  );
+  const n =
+    selected?.episode_number ||
+    selected?.episodeNumber ||
+    contextEpisode.value?.episode_number ||
+    contextEpisode.value?.episodeNumber;
+  return Number(n) || 0;
+});
 
 function onDramaChange() {
   selectedEpisodeId.value = "";
+}
+function goToStudioPage() {
+  if (!selectedDramaId.value || !studioEpisodeNumber.value) return;
+  navigateTo(
+    `/drama/${selectedDramaId.value}/episode/${studioEpisodeNumber.value}`,
+  );
 }
 
 const storyboardStats = computed(() => {
@@ -288,6 +620,7 @@ async function openStep(key: string) {
   stepLoading.value = true;
   stepError.value = "";
   stepData.value = null;
+  selectedPreviewStoryboardId.value = null;
 
   const epId = Number(selectedEpisodeId.value);
   try {
@@ -299,46 +632,31 @@ async function openStep(key: string) {
       const chars = await episodeAPI.characters(epId);
       if (key === "extract_characters") {
         stepData.value = {
-          markdown: [
-            `## 角色列表（${chars.length}）`,
-            ...chars.map((c: any, i: number) =>
-              [
-                `### #${i + 1} ${c.name}${c.role ? ` · ${c.role}` : ""}`.trim(),
-                `- 描述：${c.description || "—"}`,
-                `- 外貌：${c.appearance || "—"}`,
-                `- 性格：${c.personality || "—"}`,
-              ].join("\n"),
-            ),
-          ].join("\n\n"),
+          type: "extract",
+          characters: chars,
+          scenes: [],
         };
       } else {
+        const voicedCount = chars.filter(
+          (c: any) => c.voice_style || c.voiceStyle,
+        ).length;
+        const sampleCount = chars.filter(
+          (c: any) => c.voice_sample_url || c.voiceSampleUrl,
+        ).length;
         stepData.value = {
-          markdown: [
-            "## 角色音色与试听",
-            ...chars.map((c: any, i: number) =>
-              [
-                `### #${i + 1} ${c.name}`,
-                `- voice_style：${c.voice_style || c.voiceStyle || "—"}`,
-                `- voice_provider：${c.voice_provider || c.voiceProvider || "—"}`,
-                `- sample：${c.voice_sample_url || c.voiceSampleUrl || "—"}`,
-              ].join("\n"),
-            ),
-          ].join("\n\n"),
+          type: "voice",
+          characters: chars,
+          voicedCount,
+          sampleCount,
         };
       }
     } else if (key === "extract_scenes") {
       const scenes = await episodeAPI.scenes(epId);
+      const chars = await episodeAPI.characters(epId).catch(() => []);
       stepData.value = {
-        markdown: [
-          `## 场景列表（${scenes.length}）`,
-          ...scenes.map((s: any, i: number) =>
-            [
-              `### #${i + 1} ${s.location} · ${s.time}`,
-              `- prompt：${s.prompt || "—"}`,
-              `- image：${s.image_url || s.imageUrl || "—"}`,
-            ].join("\n"),
-          ),
-        ].join("\n\n"),
+        type: "extract",
+        characters: chars,
+        scenes,
       };
     } else if (
       key === "extract_storyboards" ||
@@ -348,43 +666,83 @@ async function openStep(key: string) {
     ) {
       const sbs = await episodeAPI.storyboards(epId);
       if (key === "extract_storyboards") {
+        selectedPreviewStoryboardId.value = sbs[0]?.id ?? 0;
         stepData.value = {
-          markdown: [
-            `## 分镜列表（${sbs.length}）`,
-            ...sbs.map((sb: any, i: number) =>
-              [
-                `### #${i + 1} 镜头${sb.storyboard_number || sb.storyboardNumber || sb.id} ${sb.title || ""}`.trim(),
-                `- 场景：${sb.location || "—"} · ${sb.time || "—"}`,
-                `- 对白：${(sb.dialogue || "").trim() || "—"}`,
-                `- video_prompt：${(sb.video_prompt || sb.videoPrompt || "").trim() || "—"}`,
-              ].join("\n"),
-            ),
-          ].join("\n\n"),
+          type: "storyboard",
+          storyboards: sbs,
         };
       } else {
         stepData.value = {
-          markdown: [
-            "## 镜头产物状态",
-            ...sbs.map((sb: any, i: number) =>
-              [
-                `### #${i + 1} 镜头${sb.storyboard_number || sb.storyboardNumber || sb.id} ${sb.title || ""}`.trim(),
-                `- img：${sb.composed_image || sb.composedImage || sb.first_frame_image || sb.firstFrameImage || "—"}`,
-                `- tts：${sb.tts_audio_url || sb.ttsAudioUrl || "—"}`,
-                `- video：${sb.video_url || sb.videoUrl || "—"}`,
-                `- composed：${sb.composed_video_url || sb.composedVideoUrl || "—"}`,
-              ].join("\n"),
-            ),
-          ].join("\n\n"),
+          type: "assets",
+          storyboards: sbs.map((sb: any) => ({
+            ...sb,
+            assetLines:
+              key === "generate_images"
+                ? [
+                    {
+                      label: "首帧",
+                      value: sb.first_frame_image || sb.firstFrameImage || "—",
+                    },
+                    {
+                      label: "尾帧",
+                      value: sb.last_frame_image || sb.lastFrameImage || "—",
+                    },
+                    {
+                      label: "参考图",
+                      value: sb.composed_image || sb.composedImage || "—",
+                    },
+                  ]
+                : key === "generate_videos"
+                  ? [
+                      {
+                        label: "视频",
+                        value: sb.video_url || sb.videoUrl || "—",
+                      },
+                      {
+                        label: "配音",
+                        value: sb.tts_audio_url || sb.ttsAudioUrl || "—",
+                      },
+                    ]
+                  : [
+                      {
+                        label: "原视频",
+                        value: sb.video_url || sb.videoUrl || "—",
+                      },
+                      {
+                        label: "合成视频",
+                        value:
+                          sb.composed_video_url || sb.composedVideoUrl || "—",
+                      },
+                      {
+                        label: "配音",
+                        value: sb.tts_audio_url || sb.ttsAudioUrl || "—",
+                      },
+                    ],
+          })),
         };
       }
     } else if (key === "merge_episode") {
       const res = await mergeAPI.status(epId);
+      const mergeUrl = res?.merged_url || res?.mergedUrl || "—";
+      const total = storyboards.value.length;
+      const composed = storyboards.value.filter(
+        (sb: any) => sb.composed_video_url || sb.composedVideoUrl,
+      ).length;
       stepData.value = {
-        markdown: ["```json", JSON.stringify(res, null, 2), "```"].join("\n"),
+        type: "merge",
+        composed,
+        total,
+        mergeUrl,
+        raw: res,
       };
     } else if (key === "script_rewrite") {
-      // 已在 contextEpisode 里显示
-      stepData.value = {};
+      const raw = (contextEpisode.value?.content || "").trim();
+      const script = (
+        contextEpisode.value?.script_content ||
+        contextEpisode.value?.scriptContent ||
+        ""
+      ).trim();
+      stepData.value = { type: "script", raw, script };
     } else {
       stepData.value = {};
     }
@@ -414,27 +772,49 @@ watch([selectedDramaId, selectedEpisodeId], ([d, e]) => {
 onMounted(async () => {
   await loadDramaList();
 
-  // 恢复上次选择（如果仍存在于当前项目列表里）
+  // 优先使用 URL 参数恢复（从制作页跳转时）
+  const queryDramaId = String(route.query.dramaId || "");
+  const queryEpisodeId = String(route.query.episodeId || "");
+  if (
+    queryDramaId &&
+    dramas.value.some((d) => String(d.id) === String(queryDramaId))
+  ) {
+    selectedDramaId.value = String(queryDramaId);
+    const eps =
+      dramas.value.find((d) => String(d.id) === String(queryDramaId))
+        ?.episodes || [];
+    if (
+      queryEpisodeId &&
+      Array.isArray(eps) &&
+      eps.some((e: any) => String(e.id) === String(queryEpisodeId))
+    ) {
+      selectedEpisodeId.value = String(queryEpisodeId);
+    }
+  }
+
+  // 无 URL 参数时恢复上次选择（如果仍存在于当前项目列表里）
   if (typeof window !== "undefined") {
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        if (
-          saved?.dramaId &&
-          dramas.value.some((d) => String(d.id) === String(saved.dramaId))
-        ) {
-          selectedDramaId.value = String(saved.dramaId);
-          // 只有在当前 drama 的 episode 列表中存在才恢复
-          const eps =
-            dramas.value.find((d) => String(d.id) === String(saved.dramaId))
-              ?.episodes || [];
+      if (!selectedDramaId.value) {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
           if (
-            saved?.episodeId &&
-            Array.isArray(eps) &&
-            eps.some((e: any) => String(e.id) === String(saved.episodeId))
+            saved?.dramaId &&
+            dramas.value.some((d) => String(d.id) === String(saved.dramaId))
           ) {
-            selectedEpisodeId.value = String(saved.episodeId);
+            selectedDramaId.value = String(saved.dramaId);
+            // 只有在当前 drama 的 episode 列表中存在才恢复
+            const eps =
+              dramas.value.find((d) => String(d.id) === String(saved.dramaId))
+                ?.episodes || [];
+            if (
+              saved?.episodeId &&
+              Array.isArray(eps) &&
+              eps.some((e: any) => String(e.id) === String(saved.episodeId))
+            ) {
+              selectedEpisodeId.value = String(saved.episodeId);
+            }
           }
         }
       }
@@ -596,7 +976,17 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-1);
+}
+.ctx-pipeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 6px;
+}
+.ctx-enter-studio {
+  padding: 4px 8px;
+  font-size: 10px;
 }
 .ctx-pipeline-list {
   list-style: none;
@@ -694,6 +1084,25 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
 }
+.ctx-script-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.ctx-script-card {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.ctx-script-card .ctx-pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-0);
+  overflow: auto;
+  flex: 1;
+}
 .ctx-section {
   display: flex;
   flex-direction: column;
@@ -749,6 +1158,466 @@ onBeforeUnmount(() => {
 .ctx-error {
   color: var(--error);
   font-size: 12px;
+}
+.ctx-detail-card {
+  overflow: hidden;
+}
+.ctx-detail-grid {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-1);
+  line-height: 1.6;
+}
+.ctx-prod-card {
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ctx-prod-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-1);
+  line-height: 1.6;
+}
+
+/* 与 episode 页面同款结构样式 */
+.extract-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.extract-summary {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-self: stretch;
+  position: sticky;
+  top: 0;
+  max-height: 100%;
+}
+.extract-summary-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.extract-summary-title {
+  font-size: 20px;
+  line-height: 1.05;
+  font-family: var(--font-display);
+  color: var(--text-0);
+}
+.extract-summary-desc {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.extract-summary-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.extract-summary-stat {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(19, 51, 121, 0.05);
+  border: 1px solid rgba(19, 51, 121, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.extract-summary-stat span {
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.extract-summary-stat strong {
+  font-size: 18px;
+  color: var(--text-0);
+  font-family: var(--font-display);
+}
+.extract-card {
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.extract-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-1);
+}
+.extract-list {
+  padding: 8px 14px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.extract-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+}
+.extract-row + .extract-row {
+  border-top: 1px solid var(--border);
+}
+.char-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.char-avatar.lg {
+  width: 38px;
+  height: 38px;
+  font-size: 16px;
+}
+.scene-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.extract-info {
+  min-width: 0;
+}
+.extract-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.extract-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.extract-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.extract-meta.wrap {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.voice-stage {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 12px;
+}
+.voice-stage-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-self: start;
+  position: sticky;
+  top: 0;
+  min-height: 0;
+  max-height: calc(100vh - 210px);
+  overflow: hidden;
+}
+.voice-stage-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.voice-stage-title {
+  font-size: 20px;
+  line-height: 1.05;
+  font-family: var(--font-display);
+  color: var(--text-0);
+}
+.voice-stage-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.voice-stage-stat {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(19, 51, 121, 0.05);
+  border: 1px solid rgba(19, 51, 121, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.voice-stage-stat-label {
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.voice-stage-stat strong {
+  font-size: 18px;
+  color: var(--text-0);
+  font-family: var(--font-display);
+}
+.voice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+.voice-card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-radius: 22px;
+  min-height: 0;
+}
+.voice-char {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.voice-name {
+  min-width: 0;
+  flex: 1;
+}
+.voice-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.voice-card-text {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.voice-profile-card {
+  padding: 12px;
+  border-radius: 16px;
+  background: linear-gradient(
+    135deg,
+    rgba(19, 51, 121, 0.08),
+    rgba(255, 255, 255, 0.78)
+  );
+  border: 1px solid rgba(19, 51, 121, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.voice-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.voice-profile-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-text);
+}
+.voice-profile-fit {
+  font-size: 10px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.split-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.shot-list {
+  width: 296px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg-0);
+}
+.shot-list-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 12px 10px;
+  border-bottom: 1px solid rgba(27, 41, 64, 0.06);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(10px);
+}
+.shot-list-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-0);
+}
+.shot-list-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+.shot-list-body {
+  padding: 6px;
+}
+.shot-item {
+  position: relative;
+  padding: 10px 11px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-radius: 14px;
+}
+.shot-item + .shot-item {
+  margin-top: 6px;
+}
+.shot-item:hover {
+  background: var(--bg-hover);
+  border-color: rgba(27, 41, 64, 0.06);
+}
+.shot-item.active {
+  background: var(--bg-0);
+  border-left-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-glow);
+  z-index: 1;
+}
+.shot-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shot-num {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+}
+.shot-item.active .shot-num {
+  background: var(--accent);
+  color: #fff;
+}
+.shot-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-1);
+}
+.detail-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-width: 0;
+  padding: 0 0 0 12px;
+}
+
+.prod-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+.export-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.export-hero {
+  overflow: hidden;
+}
+.export-meta {
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+:deep(.tag) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(27, 41, 64, 0.06);
+  color: var(--text-2);
+}
+:deep(.tag-accent) {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+:deep(.tag-success) {
+  background: rgba(39, 174, 96, 0.12);
+  color: var(--success, #2ea664);
+}
+:deep(.tag.mono) {
+  font-family: var(--font-mono);
 }
 </style>
 
